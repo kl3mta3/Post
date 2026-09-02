@@ -1,0 +1,7 @@
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.exe
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.dll
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.deps.json
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.runtimeconfig.json
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.pdb
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.Core.dll
+C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-updated\Post.Core.pdb

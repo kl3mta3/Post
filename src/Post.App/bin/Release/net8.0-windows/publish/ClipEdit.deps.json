@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "ClipEdit/1.0.0": {
+        "dependencies": {
+          "ClipEdit.Core": "1.0.0"
+        },
+        "runtime": {
+          "ClipEdit.dll": {}
+        }
+      },
+      "ClipEdit.Core/1.0.0": {
+        "runtime": {
+          "ClipEdit.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "ClipEdit/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "ClipEdit.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

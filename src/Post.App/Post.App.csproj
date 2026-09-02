@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\post-logo.ico</ApplicationIcon>
+    <AssemblyName>Post</AssemblyName>
+    <RootNamespace>Post.App</RootNamespace>
+    <Title>Post</Title>
+    <Product>Post</Product>
+    <Description>A desktop video, audio, and graphics editor.</Description>
+    <Company>Post contributors</Company>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Post.Core\Post.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\post-logo.ico" />
+    <Resource Include="Assets\post-logo.png" />
+  </ItemGroup>
+
+</Project>

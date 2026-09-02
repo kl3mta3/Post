@@ -1,0 +1,135 @@
+{
+  "version": 4,
+  "targets": {
+    "net8.0-windows": {
+      "Post.Core/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v8.0",
+        "compile": {
+          "bin/placeholder/Post.Core.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/Post.Core.dll": {}
+        }
+      }
+    },
+    "net8.0-windows/win-x64": {
+      "Post.Core/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v8.0",
+        "compile": {
+          "bin/placeholder/Post.Core.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/Post.Core.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Post.Core/1.0.0": {
+      "type": "project",
+      "path": "../Post.Core/Post.Core.csproj",
+      "msbuildProject": "../Post.Core/Post.Core.csproj"
+    }
+  },
+  "projectFileDependencyGroups": {
+    "net8.0-windows": [
+      "Post.Core >= 1.0.0"
+    ]
+  },
+  "packageFolders": {
+    "C:\\Users\\Kenny\\.nuget\\packages\\": {},
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
+  },
+  "project": {
+    "version": "1.0.0",
+    "restore": {
+      "projectUniqueName": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.App\\Post.App.csproj",
+      "projectName": "Post",
+      "projectPath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.App\\Post.App.csproj",
+      "packagesPath": "C:\\Users\\Kenny\\.nuget\\packages\\",
+      "outputPath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.App\\obj\\",
+      "projectStyle": "PackageReference",
+      "fallbackFolders": [
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+      ],
+      "configFilePaths": [
+        "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\NuGet.Config",
+        "C:\\Users\\Kenny\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+      ],
+      "originalTargetFrameworks": [
+        "net8.0-windows"
+      ],
+      "frameworks": {
+        "net8.0-windows": {
+          "framework": "net8.0-windows7.0",
+          "targetAlias": "net8.0-windows",
+          "projectReferences": {
+            "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\Post.Core.csproj": {
+              "projectPath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\Post.Core.csproj"
+            }
+          }
+        }
+      },
+      "warningProperties": {
+        "warnAsError": [
+          "NU1605"
+        ]
+      },
+      "restoreAuditProperties": {
+        "enableAudit": "true",
+        "auditLevel": "low",
+        "auditMode": "direct"
+      },
+      "SdkAnalysisLevel": "10.0.400"
+    },
+    "frameworks": {
+      "net8.0-windows": {
+        "framework": "net8.0-windows7.0",
+        "targetAlias": "net8.0-windows",
+        "imports": [
+          "net461",
+          "net462",
+          "net47",
+          "net471",
+          "net472",
+          "net48",
+          "net481"
+        ],
+        "assetTargetFallback": true,
+        "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Runtime.win-x64",
+            "version": "[8.0.30, 8.0.30]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Runtime.win-x64",
+            "version": "[8.0.30, 8.0.30]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Runtime.win-x64",
+            "version": "[8.0.30, 8.0.30]"
+          }
+        ],
+        "frameworkReferences": {
+          "Microsoft.NETCore.App": {
+            "privateAssets": "all"
+          },
+          "Microsoft.WindowsDesktop.App.WPF": {
+            "privateAssets": "none"
+          }
+        },
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.400/PortableRuntimeIdentifierGraph.json"
+      }
+    },
+    "runtimes": {
+      "win-x64": {
+        "#import": []
+      }
+    }
+  }
+}

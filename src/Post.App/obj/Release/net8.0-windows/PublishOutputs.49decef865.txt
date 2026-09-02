@@ -1,0 +1,7 @@
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.exe
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.dll
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.deps.json
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.runtimeconfig.json
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.pdb
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.Core.dll
+C:\Users\Kenny\source\GPT\FreeClipEdit\src\ClipEdit.App\bin\Release\net8.0-windows\publish\ClipEdit.Core.pdb
