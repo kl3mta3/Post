@@ -19,10 +19,62 @@ public enum ExportMode { Lossless, Discord20Mb, Discord10Mb, CustomSize, Gif }
 public enum AspectPreset { Original, Landscape16x9, Vertical9x16, Square1x1, Portrait4x5, Standard4x3, Cinema21x9 }
 // Keep the original numeric values stable because Post project JSON stores enums as numbers.
 public enum TimelineLayerKind { Video = 0, Graphics = 1, Audio = 2 }
-public enum GraphicsOverlayKind { Text, Image, SolidColor, Gradient }
+// Keep the numeric values stable because Post project JSON stores enums as numbers.
+public enum GraphicsOverlayKind { Text = 0, Image = 1, SolidColor = 2, Gradient = 3, Lottie = 4 }
 public enum GraphicGradientKind { Linear, Radial }
 public enum KeyframeInterpolation { Linear, Discrete, Smooth }
 public enum KeyframeProperty { PositionX, PositionY, Scale, Opacity, Volume }
+// Keep the numeric values stable because Post project JSON stores enums as numbers.
+public enum VideoEffectKind { Vignette = 0, Blur = 1, Sharpen = 2, ColorCorrection = 3, Lut = 4 }
+
+/// <summary>
+/// One entry in a clip's (or the whole timeline's) effect stack. A single flat
+/// property bag covers every kind, matching how <see cref="GraphicsOverlay"/> works.
+/// </summary>
+public sealed class VideoEffect
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public VideoEffectKind Kind { get; set; }
+    public bool IsEnabled { get; set; } = true;
+    /// <summary>Generic strength, 0–1: vignette falloff, blur radius, sharpen amount.</summary>
+    public double Amount { get; set; } = .5;
+    public double Brightness { get; set; }
+    public double Contrast { get; set; } = 1;
+    public double Saturation { get; set; } = 1;
+    public double Gamma { get; set; } = 1;
+    public double Hue { get; set; }
+    /// <summary>Colour lookup table (.cube) for <see cref="VideoEffectKind.Lut"/>.</summary>
+    public string? FilePath { get; set; }
+
+    public string DisplayName => Kind switch
+    {
+        VideoEffectKind.Vignette => "Vignette",
+        VideoEffectKind.Blur => "Blur",
+        VideoEffectKind.Sharpen => "Sharpen",
+        VideoEffectKind.ColorCorrection => "Color correction",
+        _ => "LUT",
+    };
+
+    public string Summary => Kind switch
+    {
+        VideoEffectKind.ColorCorrection => $"bright {Brightness:0.##}, contrast {Contrast:0.##}, saturation {Saturation:0.##}, gamma {Gamma:0.##}, hue {Hue:0}°",
+        VideoEffectKind.Lut => FilePath is null ? "no file chosen" : Path.GetFileName(FilePath),
+        _ => $"amount {Amount * 100:0}%",
+    };
+
+    public VideoEffect Clone() => new()
+    {
+        Id = Id, Kind = Kind, IsEnabled = IsEnabled, Amount = Amount, Brightness = Brightness,
+        Contrast = Contrast, Saturation = Saturation, Gamma = Gamma, Hue = Hue, FilePath = FilePath,
+    };
+
+    /// <summary>Takes every value except the identity, so edits can be applied in place.</summary>
+    public void CopyFrom(VideoEffect other)
+    {
+        Kind = other.Kind; IsEnabled = other.IsEnabled; Amount = other.Amount; Brightness = other.Brightness;
+        Contrast = other.Contrast; Saturation = other.Saturation; Gamma = other.Gamma; Hue = other.Hue; FilePath = other.FilePath;
+    }
+}
 
 public sealed class AnimationKeyframe
 {
@@ -67,6 +119,7 @@ public sealed class TimelinePlacement
     public TimeSpan InPoint { get; set; }
     public TimeSpan? Length { get; set; }
     public ObservableCollection<AnimationKeyframe> Keyframes { get; } = [];
+    public ObservableCollection<VideoEffect> Effects { get; } = [];
     public TimeSpan AvailableDuration => Clip.SelectedDuration > InPoint ? Clip.SelectedDuration - InPoint : TimeSpan.Zero;
     public TimeSpan Duration => Length is { } length && length < AvailableDuration ? length : AvailableDuration;
     public TimeSpan End => Start + Duration;
@@ -80,6 +133,8 @@ public sealed class TimelineLayer
     public bool IsMuted { get; set; }
     public bool MuteLeftChannel { get; set; }
     public bool MuteRightChannel { get; set; }
+    /// <summary>How loud this layer sits in the mix, 0 to 2, multiplying its clips' own volume.</summary>
+    public double Volume { get; set; } = 1;
     public TimelineLayerKind Kind { get; set; }
     public ObservableCollection<TimelinePlacement> Placements { get; } = [];
     public ObservableCollection<GraphicsOverlay> Graphics { get; } = [];
@@ -116,6 +171,10 @@ public sealed class GraphicsOverlay
 public sealed class TimelineComposition
 {
     public ObservableCollection<TimelineLayer> Layers { get; } = [];
+    /// <summary>Effects applied to the finished frame, after every layer is composited.</summary>
+    public ObservableCollection<VideoEffect> OutputEffects { get; } = [];
+    /// <summary>Equalizer applied to the mixed audio of the whole timeline.</summary>
+    public AudioEqualizer Equalizer { get; } = AudioEqualizer.Flat();
     public TimeSpan WorkspaceDuration { get; set; } = TimeSpan.FromMinutes(1);
     public bool RenderWorkspaceTailAsBlack { get; set; }
     public TimeSpan ContentDuration => Layers
@@ -146,6 +205,13 @@ public sealed record ExportOptions
     public bool ReplaceOriginal { get; init; }
     public int VideoQualityCrf { get; init; } = 18;
     public int AudioBitrateKbps { get; init; } = 192;
+    /// <summary>
+    /// Effects for exports that have no timeline of their own (single clip, batch, montage).
+    /// Timeline exports carry their effects on the placements and the composition instead.
+    /// </summary>
+    public IReadOnlyList<VideoEffect> Effects { get; init; } = [];
+    /// <summary>Equalizer for exports with no timeline of their own.</summary>
+    public AudioEqualizer? Equalizer { get; init; }
 }
 public sealed record ExportProgress(double Fraction, string Stage);
 public static class TimeText

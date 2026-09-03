@@ -18,18 +18,6 @@
 
 Post is designed for quick editing without hiding useful timeline controls. Import media, arrange it on independent layers, add animated graphics, preview the composition, and export through the included FFmpeg media engine.
 
-## Watch Post in action
-
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=pu-8aG03dg0">
-    <img src="https://img.youtube.com/vi/pu-8aG03dg0/maxresdefault.jpg" alt="Watch the Post video editor demonstration on YouTube" width="720">
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=pu-8aG03dg0"><strong>Watch the Post demonstration on YouTube</strong></a>
-</p>
-
 ## Install Post
 
 Post currently supports 64-bit Windows 10 and Windows 11.

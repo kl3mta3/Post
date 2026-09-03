@@ -9,3 +9,16 @@ C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\obj\Release\net8.0\Post.Cor
 C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\obj\Release\net8.0\refint\Post.Core.dll
 C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\obj\Release\net8.0\Post.Core.pdb
 C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\obj\Release\net8.0\ref\Post.Core.dll
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\bin\Release\net8.0\Post.Core.deps.json
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\bin\Release\net8.0\Post.Core.dll
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\bin\Release\net8.0\Post.Core.pdb
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.AssemblyInfoInputs.cache
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.AssemblyInfo.cs
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.csproj.CoreCompileInputs.cache
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.sourcelink.json
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.dll
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\refint\Post.Core.dll
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.pdb
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\ref\Post.Core.dll
+C:\Users\Kenny\source\Claude\Post\src\Post.Core\obj\Release\net8.0\Post.Core.csproj.AssemblyReference.cache

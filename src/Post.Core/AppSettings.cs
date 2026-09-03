@@ -11,7 +11,11 @@ public sealed record AppSettings
     public string DefaultAudioFormat { get; init; } = "mp3";
     public int VideoQualityCrf { get; init; } = 18;
     public int AudioBitrateKbps { get; init; } = 192;
+    /// <summary>Which H.264 encoder exports use: "auto", "cpu", or an encoder name.</summary>
+    public string VideoEncoder { get; init; } = "auto";
     public string[] RecentProjectPaths { get; init; } = [];
+    /// <summary>Lottie animations imported in the Animations window.</summary>
+    public string[] AnimationPaths { get; init; } = [];
     public static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Post", "settings.json");
     private static string LegacySettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipEdit", "settings.json");
     public static AppSettings Load()

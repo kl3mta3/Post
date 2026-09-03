@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("A desktop video, audio, and graphics editor.")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a861bfd4770ad02ef74296d71e2d0d687c79ff35")]
 [assembly: System.Reflection.AssemblyProductAttribute("Post")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Post")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -1,9 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\post-logo.ico</ApplicationIcon>
@@ -23,6 +24,14 @@
   <ItemGroup>
     <Resource Include="Assets\post-logo.ico" />
     <Resource Include="Assets\post-logo.png" />
+    <Resource Include="Assets\PreviewEffect.ps" />
+    <Resource Include="Assets\PreviewEffectBlur.ps" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.151.1" />
+    <PackageReference Include="SkiaSharp.Skottie" Version="4.151.1" />
   </ItemGroup>
 
 </Project>

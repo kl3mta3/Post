@@ -1,12 +1,84 @@
 {
   "version": 4,
   "targets": {
-    "net8.0": {},
-    "net8.0/win-x64": {}
+    "net8.0": {
+      "System.Security.Cryptography.ProtectedData/10.0.11": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/System.Security.Cryptography.ProtectedData.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/System.Security.Cryptography.ProtectedData.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "buildTransitive/net8.0/_._": {}
+        }
+      }
+    },
+    "net8.0/win-x64": {
+      "System.Security.Cryptography.ProtectedData/10.0.11": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/System.Security.Cryptography.ProtectedData.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/System.Security.Cryptography.ProtectedData.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "buildTransitive/net8.0/_._": {}
+        }
+      }
+    }
   },
-  "libraries": {},
+  "libraries": {
+    "System.Security.Cryptography.ProtectedData/10.0.11": {
+      "sha512": "PNoxCTPb+Tlux+GJyq4c89ddYdpioVSqfGx8pqOF6shCSKwUNNctXhQtRkCICjbJmGrJJsW8NY52kVYO/b8mlQ==",
+      "type": "package",
+      "path": "system.security.cryptography.protecteddata/10.0.11",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "Icon.png",
+        "PACKAGE.md",
+        "THIRD-PARTY-NOTICES.TXT",
+        "buildTransitive/net461/System.Security.Cryptography.ProtectedData.targets",
+        "buildTransitive/net462/_._",
+        "buildTransitive/net8.0/_._",
+        "buildTransitive/netcoreapp2.0/System.Security.Cryptography.ProtectedData.targets",
+        "lib/MonoAndroid10/_._",
+        "lib/MonoTouch10/_._",
+        "lib/net10.0/System.Security.Cryptography.ProtectedData.dll",
+        "lib/net10.0/System.Security.Cryptography.ProtectedData.xml",
+        "lib/net462/System.Security.Cryptography.ProtectedData.dll",
+        "lib/net462/System.Security.Cryptography.ProtectedData.xml",
+        "lib/net8.0/System.Security.Cryptography.ProtectedData.dll",
+        "lib/net8.0/System.Security.Cryptography.ProtectedData.xml",
+        "lib/net9.0/System.Security.Cryptography.ProtectedData.dll",
+        "lib/net9.0/System.Security.Cryptography.ProtectedData.xml",
+        "lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll",
+        "lib/netstandard2.0/System.Security.Cryptography.ProtectedData.xml",
+        "lib/xamarinios10/_._",
+        "lib/xamarinmac20/_._",
+        "lib/xamarintvos10/_._",
+        "lib/xamarinwatchos10/_._",
+        "system.security.cryptography.protecteddata.10.0.11.nupkg.sha512",
+        "system.security.cryptography.protecteddata.nuspec",
+        "useSharedDesignerContext.txt"
+      ]
+    }
+  },
   "projectFileDependencyGroups": {
-    "net8.0": []
+    "net8.0": [
+      "System.Security.Cryptography.ProtectedData >= 10.0.11"
+    ]
   },
   "packageFolders": {
     "C:\\Users\\Kenny\\.nuget\\packages\\": {},
@@ -15,17 +87,16 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\Post.Core.csproj",
+      "projectUniqueName": "C:\\Users\\Kenny\\source\\Claude\\Post\\src\\Post.Core\\Post.Core.csproj",
       "projectName": "Post.Core",
-      "projectPath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\Post.Core.csproj",
+      "projectPath": "C:\\Users\\Kenny\\source\\Claude\\Post\\src\\Post.Core\\Post.Core.csproj",
       "packagesPath": "C:\\Users\\Kenny\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\obj\\",
+      "outputPath": "C:\\Users\\Kenny\\source\\Claude\\Post\\src\\Post.Core\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
       ],
       "configFilePaths": [
-        "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\NuGet.Config",
         "C:\\Users\\Kenny\\AppData\\Roaming\\NuGet\\NuGet.Config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
@@ -33,6 +104,11 @@
       "originalTargetFrameworks": [
         "net8.0"
       ],
+      "sources": {
+        "C:\\LocalNugetPackages": {},
+        "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "https://api.nuget.org/v3/index.json": {}
+      },
       "frameworks": {
         "net8.0": {
           "framework": "net8.0",
@@ -56,6 +132,12 @@
       "net8.0": {
         "framework": "net8.0",
         "targetAlias": "net8.0",
+        "dependencies": {
+          "System.Security.Cryptography.ProtectedData": {
+            "target": "Package",
+            "version": "[10.0.11, )"
+          }
+        },
         "imports": [
           "net461",
           "net462",

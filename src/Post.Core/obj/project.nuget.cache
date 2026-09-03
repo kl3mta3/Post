@@ -1,9 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "oM++fGO++Ik=",
+  "dgSpecHash": "k7TuiHPfRcI=",
   "success": true,
-  "projectFilePath": "C:\\Users\\Kenny\\source\\GPT\\FreeClipEdit\\src\\Post.Core\\Post.Core.csproj",
+  "projectFilePath": "C:\\Users\\Kenny\\source\\Claude\\Post\\src\\Post.Core\\Post.Core.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\Kenny\\.nuget\\packages\\system.security.cryptography.protecteddata\\10.0.11\\system.security.cryptography.protecteddata.10.0.11.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\8.0.30\\microsoft.netcore.app.runtime.win-x64.8.0.30.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\8.0.30\\microsoft.windowsdesktop.app.runtime.win-x64.8.0.30.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\8.0.30\\microsoft.aspnetcore.app.runtime.win-x64.8.0.30.nupkg.sha512"

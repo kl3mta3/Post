@@ -35,11 +35,11 @@ public partial class MainWindow : Window
 
     private sealed record ProjectEditSnapshot(ClipState[] Clips, LayerState[] Layers, TimeSpan WorkspaceDuration,
         bool RenderWorkspaceTailAsBlack, Guid? ActiveLayerId, Guid? SelectedPlacementId, Guid? SelectedGraphicId,
-        Guid? AutomaticPlacementId, TimeSpan SequencePosition, TimeSpan EditPosition);
+        Guid? AutomaticPlacementId, TimeSpan SequencePosition, TimeSpan EditPosition, VideoEffect[] OutputEffects, AudioEqualizer Equalizer);
     private sealed record ClipState(ClipItem Clip, ClipSnapshot Snapshot);
     private sealed record LayerState(Guid Id, string Name, bool IsVisible, bool IsMuted, bool MuteLeftChannel, bool MuteRightChannel, TimelineLayerKind Kind,
-        PlacementState[] Placements, GraphicState[] Graphics);
-    private sealed record PlacementState(Guid Id, ClipItem Clip, TimeSpan Start, TimeSpan InPoint, TimeSpan? Length, KeyframeState[] Keyframes);
+        PlacementState[] Placements, GraphicState[] Graphics, double Volume = 1);
+    private sealed record PlacementState(Guid Id, ClipItem Clip, TimeSpan Start, TimeSpan InPoint, TimeSpan? Length, KeyframeState[] Keyframes, VideoEffect[] Effects);
     private sealed record GraphicState(Guid Id, GraphicsOverlayKind Kind, string Text, string? ImagePath,
         string? RenderedImagePath, string FontFamily, double FontSize, string Foreground, string Background,
         string FillColor1, string FillColor2, bool UseSecondFillColor, GraphicGradientKind GradientKind, double GradientAngle,
@@ -143,8 +143,8 @@ public partial class MainWindow : Window
         Panel.SetZIndex(_liveGraphicsHost, 50); PreviewSurface.Children.Add(_liveGraphicsHost);
         Player.ScrubbingEnabled = true;
         Panel.SetZIndex(WaveformCanvas, 3); Panel.SetZIndex(CutOverlay, 4);
-        _tools = FfmpegLocator.Find(); var runner = new ProcessRunner(); _probe = new(_tools, runner); _engine = new(_tools, runner);
-        EnsureProjectHistory();
+        _tools = FfmpegLocator.Find(); var runner = new ProcessRunner(); _probe = new(_tools, runner); _engine = new(_tools, runner); _engine.EncoderPreference = _settings.VideoEncoder;
+        EnsureProjectHistory(); InitializeExportJobs();
         _timer.Tick += Timer_Tick; _timer.Start(); PreviewVolume.Value = _settings.PreviewVolume;
         _audioPreviewPlayer.MediaOpened += AudioPreviewPlayer_MediaOpened;
         _audioPreviewPlayer.MediaEnded += (_, _) => { if (_projectMediaAudioPreviewActive) { if (_loop) { _audioPreviewPlayer.Position = TimeSpan.Zero; _audioPreviewPlayer.Play(); } else Pause(); } };
@@ -363,14 +363,21 @@ public partial class MainWindow : Window
                 foreach (var savedLayer in dto.Layers)
                 {
                     var legacyAudioMute = savedLayer.Kind == TimelineLayerKind.Audio && savedLayer.IsMuted && !savedLayer.MuteLeftChannel && !savedLayer.MuteRightChannel;
-                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind }; project.Composition.Layers.Add(layer);
-                    foreach (var savedPlacement in savedLayer.Placements) if (savedPlacement.ClipIndex >= 0 && savedPlacement.ClipIndex < clipMap.Length && clipMap[savedPlacement.ClipIndex] is { } clip) { var placement = TimelineOperations.AddPlacement(layer, clip, TimeSpan.FromSeconds(Math.Max(0, savedPlacement.StartSeconds))); placement.InPoint = TimeSpan.FromSeconds(Math.Max(0, savedPlacement.InSeconds)); placement.Length = savedPlacement.DurationSeconds is { } length ? TimeSpan.FromSeconds(Math.Max(0, length)) : null; foreach (var keyframe in savedPlacement.Keyframes ?? []) placement.Keyframes.Add(FromDocument(keyframe, placement.Duration)); }
+                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind, Volume = savedLayer.Volume }; project.Composition.Layers.Add(layer);
+                    foreach (var savedPlacement in savedLayer.Placements) if (savedPlacement.ClipIndex >= 0 && savedPlacement.ClipIndex < clipMap.Length && clipMap[savedPlacement.ClipIndex] is { } clip) { var placement = TimelineOperations.AddPlacement(layer, clip, TimeSpan.FromSeconds(Math.Max(0, savedPlacement.StartSeconds))); placement.InPoint = TimeSpan.FromSeconds(Math.Max(0, savedPlacement.InSeconds)); placement.Length = savedPlacement.DurationSeconds is { } length ? TimeSpan.FromSeconds(Math.Max(0, length)) : null; foreach (var keyframe in savedPlacement.Keyframes ?? []) placement.Keyframes.Add(FromDocument(keyframe, placement.Duration)); foreach (var effect in savedPlacement.Effects ?? []) placement.Effects.Add(FromDocument(effect)); }
                     foreach (var saved in savedLayer.Graphics ?? [])
                     {
-                        if (saved.Kind == GraphicsOverlayKind.Image && (string.IsNullOrWhiteSpace(saved.ImagePath) || !File.Exists(saved.ImagePath))) { if (!string.IsNullOrWhiteSpace(saved.ImagePath)) missing.Add(saved.ImagePath); continue; }
+                        if (saved.Kind is GraphicsOverlayKind.Image or GraphicsOverlayKind.Lottie && (string.IsNullOrWhiteSpace(saved.ImagePath) || !File.Exists(saved.ImagePath))) { if (!string.IsNullOrWhiteSpace(saved.ImagePath)) missing.Add(saved.ImagePath); continue; }
                         var graphic = new GraphicsOverlay { Kind = saved.Kind, Text = saved.Text, ImagePath = saved.ImagePath, FontFamily = saved.FontFamily, FontSize = saved.FontSize, Foreground = saved.Foreground, Background = saved.Background, FillColor1 = saved.FillColor1, FillColor2 = saved.FillColor2, UseSecondFillColor = saved.UseSecondFillColor, GradientKind = saved.GradientKind, GradientAngle = saved.GradientAngle, Opacity = saved.Opacity, PreserveAspectRatio = saved.PreserveAspectRatio, X = saved.X, Y = saved.Y, Width = saved.Width, Height = saved.Height, Start = TimeSpan.FromSeconds(Math.Max(0, saved.StartSeconds)), Duration = TimeSpan.FromSeconds(Math.Max(.1, saved.DurationSeconds)) };
                         foreach (var keyframe in saved.Keyframes ?? []) graphic.Keyframes.Add(FromDocument(keyframe, graphic.Duration)); layer.Graphics.Add(graphic);
                     }
+                }
+                foreach (var effect in dto.OutputEffects ?? []) project.Composition.OutputEffects.Add(FromDocument(effect));
+                if (dto.Equalizer is { } savedEqualizer && savedEqualizer.Bands.Length > 0)
+                {
+                    project.Composition.Equalizer.IsEnabled = savedEqualizer.IsEnabled; project.Composition.Equalizer.GainDb = savedEqualizer.GainDb;
+                    project.Composition.Equalizer.Bands.Clear();
+                    foreach (var band in savedEqualizer.Bands) project.Composition.Equalizer.Bands.Add(new AudioEqualizerBand { FrequencyHz = band.FrequencyHz, GainDb = band.GainDb, Width = band.Width });
                 }
                 NormalizeGraphicsLayers(project.Composition);
                 project.Current = project.Clips.FirstOrDefault(clip => !clip.Media.IsStillImage); project.ProjectHistory.Push(CaptureProjectSnapshot(project)); RememberRecentProject(path); loaded.Add(project);
@@ -419,11 +426,16 @@ public partial class MainWindow : Window
         var dto = new PostProjectDocument(1, System.IO.Path.GetFileNameWithoutExtension(path), project.Composition.WorkspaceDuration.TotalSeconds, project.Composition.RenderWorkspaceTailAsBlack,
             project.Clips.Select(clip => new ProjectClipDocument(clip.SourcePath, clip.Segments.Select(segment => new ProjectSegmentDocument(segment.SourceStart.TotalSeconds, segment.SourceEnd.TotalSeconds)).ToArray())).ToArray(),
             project.Composition.Layers.Select(layer => new ProjectLayerDocument(layer.Name, layer.IsVisible, layer.IsMuted,
-                layer.Placements.Where(placement => clipIndexes.ContainsKey(placement.Clip)).Select(placement => new ProjectPlacementDocument(clipIndexes[placement.Clip], placement.Start.TotalSeconds, placement.InPoint.TotalSeconds, placement.Duration.TotalSeconds, placement.Keyframes.Select(ToDocument).ToArray())).ToArray(),
-                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel)).ToArray());
+                layer.Placements.Where(placement => clipIndexes.ContainsKey(placement.Clip)).Select(placement => new ProjectPlacementDocument(clipIndexes[placement.Clip], placement.Start.TotalSeconds, placement.InPoint.TotalSeconds, placement.Duration.TotalSeconds, placement.Keyframes.Select(ToDocument).ToArray(), placement.Effects.Select(ToDocument).ToArray())).ToArray(),
+                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel, layer.Volume)).ToArray(),
+            project.Composition.OutputEffects.Select(ToDocument).ToArray(),
+            new ProjectEqualizerDocument(project.Composition.Equalizer.IsEnabled, project.Composition.Equalizer.GainDb,
+                project.Composition.Equalizer.Bands.Select(band => new ProjectEqualizerBandDocument(band.FrequencyHz, band.GainDb, band.Width)).ToArray()));
         await PostProjectStore.SaveAsync(path, dto); project.FilePath = path; project.Name = System.IO.Path.GetFileNameWithoutExtension(path); RememberRecentProject(path); RefreshProjectTabs();
     }
 
+    private static ProjectEffectDocument ToDocument(VideoEffect item) => new(item.Kind, item.IsEnabled, item.Amount, item.Brightness, item.Contrast, item.Saturation, item.Gamma, item.Hue, item.FilePath);
+    private static VideoEffect FromDocument(ProjectEffectDocument item) => new() { Kind = item.Kind, IsEnabled = item.IsEnabled, Amount = item.Amount, Brightness = item.Brightness, Contrast = item.Contrast, Saturation = item.Saturation, Gamma = item.Gamma, Hue = item.Hue, FilePath = item.FilePath };
     private static ProjectKeyframeDocument ToDocument(AnimationKeyframe item) => new(item.Property, item.Offset.TotalSeconds, item.Value, item.Interpolation);
     private static AnimationKeyframe FromDocument(ProjectKeyframeDocument item, TimeSpan duration) => new() { Property = item.Property, Offset = ClampTime(TimeSpan.FromSeconds(Math.Max(0, item.OffsetSeconds)), TimeSpan.Zero, duration), Value = item.Value, Interpolation = item.Interpolation };
 
@@ -485,7 +497,9 @@ public partial class MainWindow : Window
         get
         {
             var placements = _composition.Layers.SelectMany(layer => layer.Placements).ToArray();
-            return _composition.HasVisibleGraphics || _composition.Layers.Count > 1 || placements.Length != 1 || _current is null || !ReferenceEquals(placements[0].Clip, _current) || placements[0].Start > TimeSpan.Zero || placements[0].InPoint > TimeSpan.Zero || placements[0].Duration != placements[0].Clip.SelectedDuration || _composition.RenderWorkspaceTailAsBlack;
+            // Effects and keyframes live on the placement, and only the composition
+            // renderer applies them, so their presence rules out the plain-clip path.
+            return _composition.HasVisibleGraphics || _composition.Layers.Count > 1 || placements.Length != 1 || _current is null || !ReferenceEquals(placements[0].Clip, _current) || placements[0].Start > TimeSpan.Zero || placements[0].InPoint > TimeSpan.Zero || placements[0].Duration != placements[0].Clip.SelectedDuration || _composition.RenderWorkspaceTailAsBlack || placements[0].Effects.Count > 0 || placements[0].Keyframes.Count > 0;
         }
     }
 
@@ -590,13 +604,14 @@ public partial class MainWindow : Window
     {
         project ??= _project;
         var layers = project.Composition.Layers.Select(layer => new LayerState(layer.Id, layer.Name, layer.IsVisible, layer.IsMuted, layer.MuteLeftChannel, layer.MuteRightChannel, layer.Kind,
-            layer.Placements.Select(item => new PlacementState(item.Id, item.Clip, item.Start, item.InPoint, item.Length, item.Keyframes.Select(ToState).ToArray())).ToArray(),
+            layer.Placements.Select(item => new PlacementState(item.Id, item.Clip, item.Start, item.InPoint, item.Length, item.Keyframes.Select(ToState).ToArray(), item.Effects.Select(effect => effect.Clone()).ToArray())).ToArray(),
             layer.Graphics.Select(item => new GraphicState(item.Id, item.Kind, item.Text, item.ImagePath, item.RenderedImagePath,
                 item.FontFamily, item.FontSize, item.Foreground, item.Background, item.FillColor1, item.FillColor2, item.UseSecondFillColor, item.GradientKind, item.GradientAngle, item.Opacity, item.PreserveAspectRatio,
-                item.X, item.Y, item.Width, item.Height, item.Start, item.Duration, item.Keyframes.Select(ToState).ToArray())).ToArray())).ToArray();
+                item.X, item.Y, item.Width, item.Height, item.Start, item.Duration, item.Keyframes.Select(ToState).ToArray())).ToArray(), layer.Volume)).ToArray();
         return new(project.Clips.Select(clip => new ClipState(clip, clip.Snapshot())).ToArray(), layers,
             project.Composition.WorkspaceDuration, project.Composition.RenderWorkspaceTailAsBlack,
-            _activeLayerId, _selectedPlacementId, _selectedGraphicId, project.AutomaticPlacementId, _sequencePosition, _editPosition);
+            _activeLayerId, _selectedPlacementId, _selectedGraphicId, project.AutomaticPlacementId, _sequencePosition, _editPosition,
+            project.Composition.OutputEffects.Select(effect => effect.Clone()).ToArray(), project.Composition.Equalizer.Clone());
     }
 
     private void EnsureProjectHistory()
@@ -616,11 +631,13 @@ public partial class MainWindow : Window
         _composition.Layers.Clear();
         foreach (var saved in state.Layers)
         {
-            var layer = new TimelineLayer { Id = saved.Id, Name = saved.Name, IsVisible = saved.IsVisible, IsMuted = saved.IsMuted, MuteLeftChannel = saved.MuteLeftChannel, MuteRightChannel = saved.MuteRightChannel, Kind = saved.Kind };
-            foreach (var item in saved.Placements) { var placement = new TimelinePlacement { Id = item.Id, Clip = item.Clip, Start = item.Start, InPoint = item.InPoint, Length = item.Length }; foreach (var keyframe in item.Keyframes) placement.Keyframes.Add(FromState(keyframe)); layer.Placements.Add(placement); }
+            var layer = new TimelineLayer { Id = saved.Id, Name = saved.Name, IsVisible = saved.IsVisible, IsMuted = saved.IsMuted, MuteLeftChannel = saved.MuteLeftChannel, MuteRightChannel = saved.MuteRightChannel, Kind = saved.Kind, Volume = saved.Volume };
+            foreach (var item in saved.Placements) { var placement = new TimelinePlacement { Id = item.Id, Clip = item.Clip, Start = item.Start, InPoint = item.InPoint, Length = item.Length }; foreach (var keyframe in item.Keyframes) placement.Keyframes.Add(FromState(keyframe)); foreach (var effect in item.Effects) placement.Effects.Add(effect.Clone()); layer.Placements.Add(placement); }
             foreach (var item in saved.Graphics) { var graphic = new GraphicsOverlay { Id = item.Id, Kind = item.Kind, Text = item.Text, ImagePath = item.ImagePath, RenderedImagePath = item.RenderedImagePath, FontFamily = item.FontFamily, FontSize = item.FontSize, Foreground = item.Foreground, Background = item.Background, FillColor1 = item.FillColor1, FillColor2 = item.FillColor2, UseSecondFillColor = item.UseSecondFillColor, GradientKind = item.GradientKind, GradientAngle = item.GradientAngle, Opacity = item.Opacity, PreserveAspectRatio = item.PreserveAspectRatio, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height, Start = item.Start, Duration = item.Duration }; foreach (var keyframe in item.Keyframes) graphic.Keyframes.Add(FromState(keyframe)); layer.Graphics.Add(graphic); }
             _composition.Layers.Add(layer);
         }
+        _composition.OutputEffects.Clear(); foreach (var effect in state.OutputEffects) _composition.OutputEffects.Add(effect.Clone());
+        _composition.Equalizer.CopyFrom(state.Equalizer);
         _composition.WorkspaceDuration = state.WorkspaceDuration; _composition.RenderWorkspaceTailAsBlack = state.RenderWorkspaceTailAsBlack;
         _activeLayerId = state.ActiveLayerId; _selectedPlacementId = state.SelectedPlacementId; _selectedGraphicId = state.SelectedGraphicId;
         _project.AutomaticPlacementId = state.AutomaticPlacementId; _sequencePosition = ClampTime(state.SequencePosition, TimeSpan.Zero, _composition.DisplayDuration); _editPosition = ClampTime(state.EditPosition, TimeSpan.Zero, _composition.DisplayDuration);
@@ -650,6 +667,9 @@ public partial class MainWindow : Window
     }
     private void Timer_Tick(object? sender, EventArgs e)
     {
+        UpdateProjectMediaPreviewAudio();
+        UpdateCompositionPreviewAudio();
+        UpdatePreviewShaders();
         if (_livePreviewActive)
         {
             if (_playing)
@@ -783,7 +803,9 @@ public partial class MainWindow : Window
         {
             await Task.Delay(60, work.Token);
             Directory.CreateDirectory(_cache);
-            await _engine.CaptureFrameAsync(active.Value.Placement.Clip.SourcePath, active.Value.SourcePosition.SourceTime, output, work.Token);
+            // The still preview is the only place effects show up before a render, so
+            // apply the clip's stack and the timeline's output stack to it.
+            await _engine.CaptureFrameAsync(active.Value.Placement.Clip.SourcePath, active.Value.SourcePosition.SourceTime, output, work.Token, PreviewEffectsFor(active.Value.Placement));
             if (work.IsCancellationRequested || request != Interlocked.Read(ref _scrubFrameRequest) || _playing) return;
             _scrubFrameView.Source = LoadBitmap(output);
             _scrubFrameView.Visibility = Visibility.Visible;
@@ -838,9 +860,9 @@ public partial class MainWindow : Window
         var preload = new List<Task>();
         foreach (var layer in _composition.Layers.Where(layer => LayerIncludedInPreview(layer) && layer.Kind != TimelineLayerKind.Graphics))
             foreach (var placement in layer.Placements.Where(PlacementIncludedInPreview))
-                if (placement.Clip.PreviewPath is { } path) { if (UsesAudioOnlyPlayer(layer, placement)) EnsureLiveAudioPlayer(layer, placement, path); else EnsureLivePlayer(layer, placement, path); preload.Add(_liveReady[placement.Id].Task); }
+                if (LivePreviewPathFor(placement.Clip) is { } path) { if (UsesAudioOnlyPlayer(layer, placement)) EnsureLiveAudioPlayer(layer, placement, path); else EnsureLivePlayer(layer, placement, path); preload.Add(_liveReady[placement.Id].Task); }
         if (preload.Count > 0) await Task.WhenAny(Task.WhenAll(preload), Task.Delay(TimeSpan.FromSeconds(5)));
-        _livePreviewActive = true; var (rangeStart, rangeEnd) = CurrentLivePreviewRange; if (_sequencePosition >= rangeEnd || _sequencePosition < rangeStart) _sequencePosition = rangeStart;
+        _livePreviewActive = true; EnsurePreviewAudio(); QueueEqualizedPreview(); var (rangeStart, rangeEnd) = CurrentLivePreviewRange; if (_sequencePosition >= rangeEnd || _sequencePosition < rangeStart) _sequencePosition = rangeStart;
         _livePreviewStart = _sequencePosition;
         if (playImmediately) { CancelScrubFrame(); _livePreviewClock.Restart(); _playing = true; PlayButton.Content = "❚❚"; UpdateLivePlayers(_sequencePosition, true); }
         else { _livePreviewClock.Reset(); _playing = false; PlayButton.Content = "▶"; UpdateLivePlayers(_sequencePosition, false); }
@@ -849,6 +871,7 @@ public partial class MainWindow : Window
     private void StopLivePreview()
     {
         _livePreviewClock.Reset(); _livePreviewActive = false;
+        ClearLivePreviewAudio();
         foreach (var player in _livePlayers.Values) { player.Stop(); player.Source = null; }
         foreach (var player in _liveAudioPlayers.Values) player.Close();
         _livePlayers.Clear(); _liveDesiredPositions.Clear(); _livePlayingIds.Clear(); _liveLastCorrections.Clear();
@@ -867,7 +890,7 @@ public partial class MainWindow : Window
         foreach (var active in TimelineOperations.ActivePlacementsAt(_composition, projectTime).Where(item => LayerIncludedInPreview(item.Layer) && PlacementIncludedInPreview(item.Placement)))
         {
                 var layer = active.Layer; var placement = active.Placement;
-                if (placement.Clip.PreviewPath is not { } path) continue;
+                if (LivePreviewPathFor(placement.Clip) is not { } path) continue;
                 activeIds.Add(placement.Id);
                 var mapped = active.SourcePosition;
                 _liveDesiredPositions[placement.Id] = mapped.SourceTime;
@@ -875,7 +898,8 @@ public partial class MainWindow : Window
                 {
                     var audioPlayer = EnsureLiveAudioPlayer(layer, placement, path);
                     var offset = projectTime - placement.Start; var audioOnlyVolume = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Volume, offset, 1);
-                    audioPlayer.IsMuted = _muted || LayerAudioFullyMuted(layer); audioPlayer.Balance = LayerAudioBalance(layer); audioPlayer.Volume = Math.Clamp(PreviewVolume.Value * audioOnlyVolume, 0, 1);
+                    audioPlayer.IsMuted = _muted || LayerAudioFullyMuted(layer) || PreviewAudioEngaged; audioPlayer.Balance = LayerAudioBalance(layer); audioPlayer.Volume = Math.Clamp(PreviewVolume.Value * audioOnlyVolume * layer.Volume, 0, 1);
+                    UpdatePreviewAudioSource(layer, placement, mapped.SourceTime, audioOnlyVolume, play);
                     var drift = (audioPlayer.Position - mapped.SourceTime).Duration();
                     if (!play && drift > TimeSpan.FromMilliseconds(30)) audioPlayer.Position = mapped.SourceTime;
                     else if (play && drift > TimeSpan.FromSeconds(2) && (!_liveLastCorrections.TryGetValue(placement.Id, out var audioCorrected) || DateTime.UtcNow - audioCorrected > TimeSpan.FromSeconds(5))) { audioPlayer.Position = mapped.SourceTime; _liveLastCorrections[placement.Id] = DateTime.UtcNow; }
@@ -886,7 +910,9 @@ public partial class MainWindow : Window
                 var player = EnsureLivePlayer(layer, placement, path);
                 var localOffset = projectTime - placement.Start; var opacity = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Opacity, localOffset, 1); var scale = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Scale, localOffset, 1);
                 var x = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.PositionX, localOffset, .5); var y = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.PositionY, localOffset, .5); var animatedVolume = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Volume, localOffset, 1);
-                player.Visibility = Visibility.Visible; player.Opacity = layer.Kind == TimelineLayerKind.Audio ? 0 : (_liveOpenedPlayers.Contains(placement.Id) ? Math.Clamp(opacity, 0, 1) : 0); player.IsMuted = _muted || LayerAudioFullyMuted(layer); player.Balance = LayerAudioBalance(layer); player.Volume = Math.Clamp(PreviewVolume.Value * animatedVolume, 0, 1); Panel.SetZIndex(player, layer.Kind == TimelineLayerKind.Audio ? -1 : z--);
+                player.Visibility = Visibility.Visible; player.Opacity = layer.Kind == TimelineLayerKind.Audio ? 0 : (_liveOpenedPlayers.Contains(placement.Id) ? Math.Clamp(opacity, 0, 1) : 0); player.IsMuted = _muted || LayerAudioFullyMuted(layer) || PreviewAudioEngaged; player.Balance = LayerAudioBalance(layer); player.Volume = Math.Clamp(PreviewVolume.Value * animatedVolume * layer.Volume, 0, 1); Panel.SetZIndex(player, layer.Kind == TimelineLayerKind.Audio ? -1 : z--);
+                UpdatePreviewAudioSource(layer, placement, mapped.SourceTime, animatedVolume, play);
+                ApplyPreviewShader(player, placement.Id, [.. placement.Effects, .. _composition.OutputEffects]);
                 player.Stretch = Player.Stretch; player.RenderTransformOrigin = Player.RenderTransformOrigin;
                 var transforms = new TransformGroup(); transforms.Children.Add(new ScaleTransform(CropZoom.Value * scale, CropZoom.Value * scale)); transforms.Children.Add(new TranslateTransform((x - .5) * Math.Max(1, PreviewSurface.ActualWidth), (y - .5) * Math.Max(1, PreviewSurface.ActualHeight))); player.RenderTransform = transforms;
                 var uri = new Uri(path);
@@ -910,7 +936,46 @@ public partial class MainWindow : Window
         }
         foreach (var item in _livePlayers.Where(item => !activeIds.Contains(item.Key))) { _livePlayingIds.Remove(item.Key); item.Value.Pause(); item.Value.Visibility = Visibility.Collapsed; }
         foreach (var item in _liveAudioPlayers.Where(item => !activeIds.Contains(item.Key))) { _livePlayingIds.Remove(item.Key); item.Value.Pause(); }
+        FinishPreviewAudioFrame(activeIds, play);
         UpdateLiveGraphics(projectTime);
+    }
+
+    /// <summary>
+    /// The layer's own level in the mix, sitting on top of whatever volume keyframes its
+    /// clips carry. Dragging is live: the preview follows without a rebuild, and only
+    /// letting go writes an undo step, so a drag is one edit rather than dozens.
+    /// </summary>
+    private FrameworkElement BuildLayerVolume(TimelineLayer layer)
+    {
+        var slider = new Slider
+        {
+            Minimum = 0, Maximum = 2, Value = Math.Clamp(layer.Volume, 0, 2), Width = 58, Height = 20,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
+            SmallChange = .05, LargeChange = .1, IsSnapToTickEnabled = false,
+            ToolTip = $"Layer volume: {layer.Volume * 100:0}%",
+        };
+        slider.ValueChanged += (_, e) =>
+        {
+            layer.Volume = e.NewValue;
+            slider.ToolTip = $"Layer volume: {e.NewValue * 100:0}%";
+            ApplyLiveLayerVolume(layer);
+        };
+        slider.PreviewMouseLeftButtonDown += (_, _) => EnsureProjectHistory();
+        slider.LostMouseCapture += (_, _) => CommitProjectEdit();
+        slider.KeyUp += (_, _) => { EnsureProjectHistory(); CommitProjectEdit(); };
+        return slider;
+    }
+
+    /// <summary>Pushes a layer's level onto whichever players are already playing it.</summary>
+    private void ApplyLiveLayerVolume(TimelineLayer layer)
+    {
+        foreach (var placement in layer.Placements)
+        {
+            if (_livePlayers.TryGetValue(placement.Id, out var player))
+                player.Volume = Math.Clamp(PreviewVolume.Value * layer.Volume, 0, 1);
+            if (_liveAudioPlayers.TryGetValue(placement.Id, out var audioPlayer))
+                audioPlayer.Volume = Math.Clamp(PreviewVolume.Value * layer.Volume, 0, 1);
+        }
     }
 
     private void SetLayerMuted(TimelineLayer layer, bool muted)
@@ -1006,7 +1071,12 @@ public partial class MainWindow : Window
             {
                 var offset = projectTime - graphic.Start;
                 FrameworkElement element;
-                if (graphic.Kind == GraphicsOverlayKind.Image && graphic.ImagePath is { } path && File.Exists(path))
+                if (graphic.Kind == GraphicsOverlayKind.Lottie)
+                {
+                    if (LottieFrameFor(graphic, offset, width, height) is not { } lottieFrame) continue;
+                    element = new Image { Source = lottieFrame, Stretch = graphic.PreserveAspectRatio ? Stretch.Uniform : Stretch.Fill };
+                }
+                else if (graphic.Kind == GraphicsOverlayKind.Image && graphic.ImagePath is { } path && File.Exists(path))
                 {
                     try { element = new Image { Source = new BitmapImage(new Uri(path)), Stretch = graphic.PreserveAspectRatio ? Stretch.Uniform : Stretch.Fill }; } catch { continue; }
                 }
@@ -1135,7 +1205,9 @@ public partial class MainWindow : Window
             var up = new Button { Content = "↑", Padding = new Thickness(6, 0, 6, 0), Height = 20, Margin = new Thickness(1, 0, 1, 0), ToolTip = "Move layer up", IsEnabled = currentLayerIndex > 0 }; up.Click += (_, _) => { EnsureProjectHistory(); if (TimelineOperations.MoveLayer(_composition, layer.Id, currentLayerIndex - 1)) CommitProjectEdit(); InvalidateCompositionPreview(); RefreshLayerStack(); DrawCuts(); };
             var down = new Button { Content = "↓", Padding = new Thickness(6, 0, 6, 0), Height = 20, Margin = new Thickness(1, 0, 1, 0), ToolTip = "Move layer down", IsEnabled = currentLayerIndex < _composition.Layers.Count - 1 }; down.Click += (_, _) => { EnsureProjectHistory(); if (TimelineOperations.MoveLayer(_composition, layer.Id, currentLayerIndex + 1)) CommitProjectEdit(); InvalidateCompositionPreview(); RefreshLayerStack(); DrawCuts(); };
             var removeLayer = new Button { Content = "×", Padding = new Thickness(7, 0, 7, 0), Height = 20, Margin = new Thickness(1, 0, 1, 0), ToolTip = "Delete layer" }; removeLayer.Click += (_, _) => RemoveLayer(layer);
-            if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(playLayer); buttons.Children.Add(up); buttons.Children.Add(down); buttons.Children.Add(removeLayer); Grid.SetRow(buttons, 2);
+            if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(playLayer); buttons.Children.Add(up); buttons.Children.Add(down);
+            if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(BuildLayerVolume(layer));
+            buttons.Children.Add(removeLayer); Grid.SetRow(buttons, 2);
             controls.Children.Add(name); controls.Children.Add(toggles); controls.Children.Add(buttons); header.Child = controls; row.Children.Add(header);
 
             var headerResize = new Thumb { Width = splitterWidth, Cursor = Cursors.SizeWE, Background = new SolidColorBrush(Color.FromRgb(47, 89, 114)), ToolTip = "Drag to resize layer headers" };
@@ -1188,7 +1260,13 @@ public partial class MainWindow : Window
                 var leftMark = new TextBlock { Text = "▶", Foreground = (Brush)FindResource("CyanBrush"), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
                 var label = new TextBlock { Text = TimeText.Format(placement.Duration), Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(3, 0, 3, 4), Background = new SolidColorBrush(Color.FromArgb(125, 0, 0, 0)) };
                 var rightMark = new TextBlock { Text = "◀", Foreground = new SolidColorBrush(Color.FromRgb(249, 200, 71)), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-                Grid.SetColumn(label, 1); Grid.SetColumn(rightMark, 2); overlay.Children.Add(leftMark); overlay.Children.Add(label); overlay.Children.Add(rightMark); video.Child = overlay;
+                Grid.SetColumn(label, 1); Grid.SetColumn(rightMark, 2); overlay.Children.Add(leftMark); overlay.Children.Add(label); overlay.Children.Add(rightMark);
+                if (placement.Effects.Any(effect => effect.IsEnabled))
+                {
+                    var badge = new Border { Background = new SolidColorBrush(Color.FromArgb(210, 92, 67, 157)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 3, 3, 0), ToolTip = string.Join("\n", placement.Effects.Where(effect => effect.IsEnabled).Select(effect => $"{effect.DisplayName} — {effect.Summary}")), Child = new TextBlock { Text = "fx", Foreground = Brushes.White, FontSize = 9, FontWeight = FontWeights.Bold } };
+                    Grid.SetColumn(badge, 1); overlay.Children.Add(badge);
+                }
+                video.Child = overlay;
                 AttachPlacementInteractions(video, lane, layer, placement);
                 var audio = new Border { Tag = placement, Width = width, Height = 22, CornerRadius = new CornerRadius(2, 2, 5, 5), BorderBrush = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(72, 230, 155)), BorderThickness = selected ? new Thickness(2) : new Thickness(1), Background = PlacementBrush(placement, true), Opacity = layer.IsMuted ? .35 : 1, ClipToBounds = true, Child = new TextBlock { Text = layer.IsMuted ? "🔇 MUTED" : "▰ AUDIO", Foreground = Brushes.White, FontSize = 9, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center } };
                 AttachPlacementInteractions(audio, lane, layer, placement);
@@ -1211,6 +1289,7 @@ public partial class MainWindow : Window
             Grid.SetColumn(lane, 2); row.Children.Add(lane); LayerStack.Children.Add(row);
         }
         UpdateLayerPlayheads();
+        _effectsWindow?.RefreshApplied();
         if (CompositionStatus is not null) CompositionStatus.Text = $"  •  LAYERS: {_composition.Layers.Count}  •  WORK: {FormatWholeSeconds(_composition.DisplayDuration)}";
     }
 
@@ -1500,9 +1579,51 @@ public partial class MainWindow : Window
     private void EnsureEffectsWindow()
     {
         if (_effectsWindow is not null) { _effectsWindow.Activate(); return; }
-        _effectsWindow = new EffectsWindow(ApplyEffectPreset) { Owner = this };
+        _effectsWindow = new EffectsWindow(new EffectHost(ApplyEffectPreset, AddVideoEffect, RemoveVideoEffect, SetVideoEffectEnabled, ListVideoEffects, DescribeEffectTarget, UpdateVideoEffect, SetPreviewEffect, AddLookStyle)) { Owner = this };
         _effectsWindow.Closed += (_, _) => { _effectsWindow = null; if (EffectsWindowMenuItem is not null) EffectsWindowMenuItem.IsChecked = false; };
         EffectsWindowMenuItem.IsChecked = true; _effectsWindow.Show();
+    }
+
+    // ---- effect stack -------------------------------------------------------
+    // Effects live on a placement, or on the composition when they should apply to
+    // the finished frame. Both are only visible in the rendered preview and the
+    // export, so every change has to drop the cached preview.
+
+    private TimelinePlacement? SelectedPlacement() => _composition.Layers.SelectMany(layer => layer.Placements).FirstOrDefault(item => item.Id == _selectedPlacementId);
+
+    private IReadOnlyList<VideoEffect> ListVideoEffects(bool wholeTimeline)
+        => wholeTimeline ? _composition.OutputEffects.ToArray() : SelectedPlacement()?.Effects.ToArray() ?? [];
+
+    private string DescribeEffectTarget(bool wholeTimeline)
+        => wholeTimeline
+            ? "Applies to the finished video, after every layer is composited."
+            : SelectedPlacement() is { } placement ? $"Applies to “{placement.Clip.DisplayName}” on the timeline." : "Select a clip on the timeline first, or tick the box below to affect the whole timeline.";
+
+    private void AddVideoEffect(VideoEffect effect, bool wholeTimeline)
+    {
+        var target = wholeTimeline ? _composition.OutputEffects : SelectedPlacement()?.Effects;
+        if (target is null) { MessageBox.Show(this, "Select a clip on the timeline first, or apply the effect to the whole timeline.", "Effects", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        EnsureProjectHistory(); target.Add(effect); AfterEffectChange();
+    }
+
+    private void RemoveVideoEffect(Guid id, bool wholeTimeline)
+    {
+        var target = wholeTimeline ? _composition.OutputEffects : SelectedPlacement()?.Effects;
+        var existing = target?.FirstOrDefault(item => item.Id == id);
+        if (target is null || existing is null) return;
+        EnsureProjectHistory(); target.Remove(existing); AfterEffectChange();
+    }
+
+    private void SetVideoEffectEnabled(Guid id, bool wholeTimeline, bool enabled)
+    {
+        var target = wholeTimeline ? _composition.OutputEffects : SelectedPlacement()?.Effects;
+        if (target?.FirstOrDefault(item => item.Id == id) is not { } existing || existing.IsEnabled == enabled) return;
+        EnsureProjectHistory(); existing.IsEnabled = enabled; AfterEffectChange();
+    }
+
+    private void AfterEffectChange()
+    {
+        InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); _ = ShowCurrentProjectFrameAsync();
     }
 
     private void ApplyEffectPreset(EffectsWindow.EffectOptions options)
@@ -1809,6 +1930,7 @@ public partial class MainWindow : Window
         GraphicsOverlayKind.Image => "Image",
         GraphicsOverlayKind.SolidColor => "Solid Color",
         GraphicsOverlayKind.Gradient => "Gradient",
+        GraphicsOverlayKind.Lottie => "Animation",
         _ => "Graphic"
     };
 
@@ -1929,31 +2051,53 @@ public partial class MainWindow : Window
     private void Redo() { EnsureProjectHistory(); if (_project.ProjectHistory.Redo() is { } state) RestoreProjectSnapshot(state); }
 
     private ExportOptions GetOptions() => new() { Mode = _mode, Aspect = _aspect, Speed = _exportSpeed, Volume = _exportVolume, CustomSizeMb = _customSizeMb, CropZoom = CropZoom.Value, PanX = PanX.Value, PanY = PanY.Value, CopyToClipboard = _settings.AutoCopyExports, VideoQualityCrf = _settings.VideoQualityCrf, AudioBitrateKbps = _settings.AudioBitrateKbps };
+    /// <summary>
+    /// Options for exports with no timeline of their own. Timeline exports read effects
+    /// from the composition, so these must not be added there as well.
+    /// </summary>
+    private ExportOptions GetClipOptions() => GetOptions() with { Effects = _composition.OutputEffects.Select(effect => effect.Clone()).ToArray(), Equalizer = _composition.Equalizer.Clone() };
     private string VideoExtension => new[] { "mp4", "mkv", "mov", "webm", "avi" }.Contains(_settings.DefaultVideoFormat, StringComparer.OrdinalIgnoreCase) ? _settings.DefaultVideoFormat.ToLowerInvariant() : "mp4";
     private static string VideoFilter(string extension) => extension switch { "mkv" => "Matroska Video|*.mkv", "mov" => "QuickTime Video|*.mov", "webm" => "WebM Video|*.webm", "avi" => "AVI Video|*.avi", _ => "MP4 Video|*.mp4" };
     private string DefaultName(ClipItem c, bool gif = false, string? extension = null) => $"{System.IO.Path.GetFileNameWithoutExtension(c.SourcePath)}_Post_{DateTime.Now:yyyyMMdd_HHmmss}.{(gif ? "gif" : extension ?? VideoExtension)}";
 
-    private async Task ExportCurrentAsync()
+    private Task ExportCurrentAsync()
     {
-        if (_current is null) return; var gif = _mode == ExportMode.Gif; var extension = gif ? "gif" : VideoExtension; var dialog = new SaveFileDialog { FileName = DefaultName(_current, gif), Filter = gif ? "Animated GIF|*.gif" : VideoFilter(extension), DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder };
-        if (dialog.ShowDialog(this) != true) return; var options = GetOptions(); if (HasCustomComposition) PrepareGraphicsForExport();
-        await RunBusyAsync(HasCustomComposition ? "Exporting layered timeline…" : "Exporting clip…", async token =>
+        if (_current is null) return Task.CompletedTask;
+        var gif = _mode == ExportMode.Gif; var extension = gif ? "gif" : VideoExtension; var dialog = new SaveFileDialog { FileName = DefaultName(_current, gif), Filter = gif ? "Animated GIF|*.gif" : VideoFilter(extension), DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder };
+        if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
+        var options = HasCustomComposition ? GetOptions() : GetClipOptions(); var output = dialog.FileName;
+        if (HasCustomComposition)
         {
-            var progress = new Progress<ExportProgress>(p => { BusyProgress.Value = p.Fraction; BusyText.Text = p.Stage; });
-            if (HasCustomComposition) await _engine.ExportCompositionAsync(_composition, dialog.FileName, options, progress, token); else await _engine.ExportAsync(_current, dialog.FileName, options, progress, token);
-        });
-        if (File.Exists(dialog.FileName)) { if (options.CopyToClipboard) CopyFile(dialog.FileName); MessageBox.Show(this, $"Saved and copied to clipboard:\n{dialog.FileName}", "Post", MessageBoxButton.OK, MessageBoxImage.Information); }
+            PrepareGraphicsForExport();
+            var composition = CloneComposition(_composition, out var scratch);
+            StartExportJob("Timeline export", output, (progress, token) => _engine.ExportCompositionAsync(composition, output, options, progress, token), job => FinishExportedFile(job, options.CopyToClipboard), scratch);
+        }
+        else
+        {
+            var clip = CloneClip(_current);
+            StartExportJob($"Export {clip.DisplayName}", output, (progress, token) => _engine.ExportAsync(clip, output, options, progress, token), job => FinishExportedFile(job, options.CopyToClipboard));
+        }
+        return Task.CompletedTask;
     }
 
-    private async Task ExportAudioAsync()
+    /// <summary>Post-export housekeeping for a background job that produced one file.</summary>
+    private void FinishExportedFile(ExportJob job, bool copyToClipboard)
     {
-        if (!_composition.Layers.Any(layer => layer.IsVisible && !LayerAudioFullyMuted(layer) && layer.Placements.Any(placement => placement.Clip.Media.HasAudio))) { MessageBox.Show(this, "No visible, unmuted layers contain audio.", "Export Audio", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (job.OutputPath is null || !File.Exists(job.OutputPath)) return;
+        if (copyToClipboard) CopyFile(job.OutputPath);
+    }
+
+    private Task ExportAudioAsync()
+    {
+        if (!_composition.Layers.Any(layer => layer.IsVisible && !LayerAudioFullyMuted(layer) && layer.Placements.Any(placement => placement.Clip.Media.HasAudio))) { MessageBox.Show(this, "No visible, unmuted layers contain audio.", "Export Audio", MessageBoxButton.OK, MessageBoxImage.Information); return Task.CompletedTask; }
         var extension = new[] { "mp3", "m4a", "wav", "flac", "ogg" }.Contains(_settings.DefaultAudioFormat, StringComparer.OrdinalIgnoreCase) ? _settings.DefaultAudioFormat.ToLowerInvariant() : "mp3";
         var filter = extension switch { "m4a" => "MPEG-4 Audio|*.m4a", "wav" => "Wave Audio|*.wav", "flac" => "FLAC Audio|*.flac", "ogg" => "Ogg Vorbis Audio|*.ogg", _ => "MP3 Audio|*.mp3" };
         var baseName = _current is null ? $"Post_Audio_{DateTime.Now:yyyyMMdd_HHmmss}.{extension}" : DefaultName(_current, false, extension);
-        var dialog = new SaveFileDialog { FileName = baseName, Filter = filter, DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return;
-        var options = GetOptions(); await RunBusyAsync("Exporting audio layers…", token => _engine.ExportCompositionAudioAsync(_composition, dialog.FileName, options, new Progress<ExportProgress>(p => { BusyProgress.Value = p.Fraction; BusyText.Text = p.Stage; }), token));
-        if (File.Exists(dialog.FileName)) { if (options.CopyToClipboard) CopyFile(dialog.FileName); MessageBox.Show(this, $"Audio saved:\n{dialog.FileName}", "Export Audio", MessageBoxButton.OK, MessageBoxImage.Information); }
+        var dialog = new SaveFileDialog { FileName = baseName, Filter = filter, DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
+        var options = GetOptions(); var output = dialog.FileName;
+        var composition = CloneComposition(_composition, out var scratch);
+        StartExportJob("Audio export", output, (progress, token) => _engine.ExportCompositionAudioAsync(composition, output, options, progress, token), job => FinishExportedFile(job, options.CopyToClipboard), scratch);
+        return Task.CompletedTask;
     }
 
     private void ExportSettings_Click(object sender, RoutedEventArgs e)
@@ -1967,6 +2111,9 @@ public partial class MainWindow : Window
         video.SelectedItem = video.Items.Cast<string>().FirstOrDefault(item => item.Equals(_settings.DefaultVideoFormat, StringComparison.OrdinalIgnoreCase)) ?? "mp4";
         var audio = new ComboBox { Margin = new Thickness(0, 5, 0, 12) }; foreach (var value in new[] { "mp3", "m4a", "wav", "flac", "ogg" }) audio.Items.Add(value); audio.SelectedItem = audio.Items.Cast<string>().FirstOrDefault(item => item.Equals(_settings.DefaultAudioFormat, StringComparison.OrdinalIgnoreCase)) ?? "mp3";
         var quality = new TextBox { Text = _settings.VideoQualityCrf.ToString(CultureInfo.InvariantCulture), Margin = new Thickness(0, 5, 0, 12) }; var bitrate = new TextBox { Text = _settings.AudioBitrateKbps.ToString(CultureInfo.InvariantCulture), Margin = new Thickness(0, 5, 0, 12) };
+        var encoder = new ComboBox { Margin = new Thickness(0, 5, 0, 4), DisplayMemberPath = "Label", SelectedValuePath = "Name" };
+        var encoderHint = new TextBlock { Text = "Looking for a hardware encoder\u2026", Foreground = Theme.Hint, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+        _ = LoadEncodersAsync(encoder, encoderHint);
         var save = new Button { Content = "Save Export Settings", IsDefault = true, HorizontalAlignment = HorizontalAlignment.Right };
         var panel = new StackPanel { Margin = new Thickness(22) };
         panel.Children.Add(new TextBlock { Text = "Render mode", FontWeight = FontWeights.SemiBold }); panel.Children.Add(mode);
@@ -1974,10 +2121,31 @@ public partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "Export volume (0–200%)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(exportVolume); panel.Children.Add(exportVolumeLabel);
         panel.Children.Add(new TextBlock { Text = "Playback / export speed", FontWeight = FontWeights.SemiBold }); panel.Children.Add(speed);
         panel.Children.Add(new Separator { Margin = new Thickness(0, 2, 0, 12) });
-        panel.Children.Add(new TextBlock { Text = "Default video format", FontWeight = FontWeights.SemiBold }); panel.Children.Add(video); panel.Children.Add(new TextBlock { Text = "Video quality (CRF 10–40; lower is sharper)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(quality); panel.Children.Add(new TextBlock { Text = "Default audio format", FontWeight = FontWeights.SemiBold }); panel.Children.Add(audio); panel.Children.Add(new TextBlock { Text = "Audio bitrate (64–512 kbps; ignored by WAV/FLAC)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(bitrate); panel.Children.Add(save);
+        panel.Children.Add(new TextBlock { Text = "Default video format", FontWeight = FontWeights.SemiBold }); panel.Children.Add(video); panel.Children.Add(new TextBlock { Text = "Video quality (CRF 10–40; lower is sharper)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(quality); panel.Children.Add(new TextBlock { Text = "Default audio format", FontWeight = FontWeights.SemiBold }); panel.Children.Add(audio); panel.Children.Add(new TextBlock { Text = "Audio bitrate (64–512 kbps; ignored by WAV/FLAC)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(bitrate);
+        panel.Children.Add(new TextBlock { Text = "Encoder", FontWeight = FontWeights.SemiBold }); panel.Children.Add(encoder); panel.Children.Add(encoderHint);
+        panel.Children.Add(save);
         var window = new Window { Title = "Export Settings", Width = 480, Height = 720, Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.CanResize };
-        save.Click += (_, _) => { if (!int.TryParse(customSize.Text, out var sizeMb) || sizeMb is < 1 or > 10000) { MessageBox.Show(window, "Custom target size must be between 1 and 10,000 MB.", "Export Settings"); return; } if (!int.TryParse(quality.Text, out var crf) || crf is < 10 or > 40) { MessageBox.Show(window, "Video quality must be between 10 and 40.", "Export Settings"); return; } if (!int.TryParse(bitrate.Text, out var kbps) || kbps is < 64 or > 512) { MessageBox.Show(window, "Audio bitrate must be between 64 and 512 kbps.", "Export Settings"); return; } _mode = (ExportMode)mode.SelectedItem; _customSizeMb = sizeMb; _exportVolume = exportVolume.Value; _exportSpeed = speeds[Math.Max(0, speed.SelectedIndex)]; _settings = _settings with { DefaultVideoFormat = (string)video.SelectedItem, DefaultAudioFormat = (string)audio.SelectedItem, VideoQualityCrf = crf, AudioBitrateKbps = kbps }; _settings.Save(); window.DialogResult = true; };
+        save.Click += (_, _) => { if (!int.TryParse(customSize.Text, out var sizeMb) || sizeMb is < 1 or > 10000) { MessageBox.Show(window, "Custom target size must be between 1 and 10,000 MB.", "Export Settings"); return; } if (!int.TryParse(quality.Text, out var crf) || crf is < 10 or > 40) { MessageBox.Show(window, "Video quality must be between 10 and 40.", "Export Settings"); return; } if (!int.TryParse(bitrate.Text, out var kbps) || kbps is < 64 or > 512) { MessageBox.Show(window, "Audio bitrate must be between 64 and 512 kbps.", "Export Settings"); return; } _mode = (ExportMode)mode.SelectedItem; _customSizeMb = sizeMb; _exportVolume = exportVolume.Value; _exportSpeed = speeds[Math.Max(0, speed.SelectedIndex)]; _settings = _settings with { DefaultVideoFormat = (string)video.SelectedItem, DefaultAudioFormat = (string)audio.SelectedItem, VideoQualityCrf = crf, AudioBitrateKbps = kbps, VideoEncoder = (string?)encoder.SelectedValue ?? _settings.VideoEncoder }; _settings.Save(); _engine.EncoderPreference = _settings.VideoEncoder; window.DialogResult = true; };
         window.ShowDialog();
+    }
+
+    /// <summary>
+    /// Fills the encoder list with what this machine can actually run. Each candidate has
+    /// to encode a frame to prove itself, so this happens off the dialog's opening.
+    /// </summary>
+    private async Task LoadEncodersAsync(ComboBox box, TextBlock hint)
+    {
+        IReadOnlyList<VideoEncoder> found;
+        try { found = await _engine.AvailableEncodersAsync(); }
+        catch { hint.Text = "Could not check for a hardware encoder; exports will use the CPU."; return; }
+
+        box.Items.Add(new { Name = "auto", Label = found[0].IsHardware ? $"Automatic \u2014 {found[0].Label}" : "Automatic \u2014 CPU" });
+        foreach (var item in found) box.Items.Add(new { item.Name, item.Label });
+        box.SelectedValue = _settings.VideoEncoder;
+        if (box.SelectedIndex < 0) box.SelectedIndex = 0;
+        hint.Text = found[0].IsHardware
+            ? "Your graphics card can encode video, which is several times quicker than the processor at the same settings. Switch to the CPU if a file ever comes out wrong."
+            : "No hardware encoder was found on this machine, so exports use the processor.";
     }
 
     private void PrepareGraphicsForExport()
@@ -1986,6 +2154,7 @@ public partial class MainWindow : Window
         foreach (var graphic in _composition.Layers.SelectMany(layer => layer.Graphics))
         {
             if (graphic.Kind == GraphicsOverlayKind.Image) { graphic.RenderedImagePath = graphic.ImagePath; continue; }
+            if (graphic.Kind == GraphicsOverlayKind.Lottie) { graphic.RenderedImagePath = RenderLottieSequence(graphic); continue; }
             var pixelWidth = Math.Clamp((int)Math.Round(graphic.Width * 1920), 32, 1920); var pixelHeight = Math.Clamp((int)Math.Round(graphic.Height * 1080), 20, 1080);
             var path = System.IO.Path.Combine(_cache, $"overlay-{graphic.Id:N}-{pixelWidth}x{pixelHeight}.png");
             var visual = graphic.Kind is GraphicsOverlayKind.SolidColor or GraphicsOverlayKind.Gradient
@@ -1996,43 +2165,65 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task ExportPlacementAsync(TimelinePlacement placement)
+    private Task ExportPlacementAsync(TimelinePlacement placement)
     {
         var gif = _mode == ExportMode.Gif;
         var extension = gif ? "gif" : VideoExtension; var dialog = new SaveFileDialog { FileName = DefaultName(placement.Clip, gif), Filter = gif ? "Animated GIF|*.gif" : VideoFilter(extension), DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder };
-        if (dialog.ShowDialog(this) != true) return;
+        if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
         var isolated = new TimelineComposition { WorkspaceDuration = placement.Duration };
+        foreach (var effect in _composition.OutputEffects) isolated.OutputEffects.Add(effect.Clone());
         var layer = new TimelineLayer { Name = "Exported Clip" }; isolated.Layers.Add(layer);
-        var copy = TimelineOperations.AddPlacement(layer, placement.Clip, TimeSpan.Zero); copy.InPoint = placement.InPoint; copy.Length = placement.Duration; foreach (var keyframe in placement.Keyframes) copy.Keyframes.Add(new AnimationKeyframe { Property = keyframe.Property, Offset = keyframe.Offset, Value = keyframe.Value, Interpolation = keyframe.Interpolation });
-        var options = GetOptions();
-        await RunBusyAsync("Exporting selected clip…", token => _engine.ExportCompositionAsync(isolated, dialog.FileName, options, new Progress<ExportProgress>(p => { BusyProgress.Value = p.Fraction; BusyText.Text = p.Stage; }), token));
-        if (File.Exists(dialog.FileName)) { if (options.CopyToClipboard) CopyFile(dialog.FileName); MessageBox.Show(this, $"Saved and copied to clipboard:\n{dialog.FileName}", "Post", MessageBoxButton.OK, MessageBoxImage.Information); }
+        var copy = TimelineOperations.AddPlacement(layer, CloneClip(placement.Clip), TimeSpan.Zero); copy.InPoint = placement.InPoint; copy.Length = placement.Duration; foreach (var keyframe in placement.Keyframes) copy.Keyframes.Add(new AnimationKeyframe { Property = keyframe.Property, Offset = keyframe.Offset, Value = keyframe.Value, Interpolation = keyframe.Interpolation });
+        var options = GetOptions(); var output = dialog.FileName;
+        StartExportJob($"Export {placement.Clip.DisplayName}", output, (progress, token) => _engine.ExportCompositionAsync(isolated, output, options, progress, token), job => FinishExportedFile(job, options.CopyToClipboard));
+        return Task.CompletedTask;
     }
 
-    private async Task ExportPlacementAsGifAsync(TimelinePlacement placement, TimeSpan duration)
+    private Task ExportPlacementAsGifAsync(TimelinePlacement placement, TimeSpan duration)
     {
-        if (!placement.Clip.Media.HasVideo || duration <= TimeSpan.Zero) return;
+        if (!placement.Clip.Media.HasVideo || duration <= TimeSpan.Zero) return Task.CompletedTask;
         var dialog = new SaveFileDialog { FileName = DefaultName(placement.Clip, true), Filter = "Animated GIF|*.gif", DefaultExt = "gif", AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder };
-        if (dialog.ShowDialog(this) != true) return;
+        if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
         var isolated = new TimelineComposition { WorkspaceDuration = duration };
+        foreach (var effect in _composition.OutputEffects) isolated.OutputEffects.Add(effect.Clone());
         var layer = new TimelineLayer { Name = "Quick GIF", Kind = TimelineLayerKind.Video }; isolated.Layers.Add(layer);
-        var copy = TimelineOperations.AddPlacement(layer, placement.Clip, TimeSpan.Zero); copy.InPoint = placement.InPoint; copy.Length = duration; foreach (var keyframe in placement.Keyframes.Where(item => item.Offset <= duration)) copy.Keyframes.Add(new AnimationKeyframe { Property = keyframe.Property, Offset = keyframe.Offset, Value = keyframe.Value, Interpolation = keyframe.Interpolation });
-        var options = GetOptions() with { Mode = ExportMode.Gif, Speed = 1 };
-        await RunBusyAsync($"Exporting GIF ({duration.TotalSeconds:0.##}s)…", token => _engine.ExportCompositionAsync(isolated, dialog.FileName, options, new Progress<ExportProgress>(p => { BusyProgress.Value = p.Fraction; BusyText.Text = p.Stage; }), token));
-        if (File.Exists(dialog.FileName)) { if (options.CopyToClipboard) CopyFile(dialog.FileName); MessageBox.Show(this, $"GIF saved:\n{dialog.FileName}", "Post", MessageBoxButton.OK, MessageBoxImage.Information); }
+        var copy = TimelineOperations.AddPlacement(layer, CloneClip(placement.Clip), TimeSpan.Zero); copy.InPoint = placement.InPoint; copy.Length = duration; foreach (var keyframe in placement.Keyframes.Where(item => item.Offset <= duration)) copy.Keyframes.Add(new AnimationKeyframe { Property = keyframe.Property, Offset = keyframe.Offset, Value = keyframe.Value, Interpolation = keyframe.Interpolation });
+        var options = GetOptions() with { Mode = ExportMode.Gif, Speed = 1 }; var output = dialog.FileName;
+        StartExportJob($"GIF ({duration.TotalSeconds:0.##}s)", output, (progress, token) => _engine.ExportCompositionAsync(isolated, output, options, progress, token), job => FinishExportedFile(job, options.CopyToClipboard));
+        return Task.CompletedTask;
     }
 
-    private async Task BatchExportAsync()
+    private Task BatchExportAsync()
     {
-        if (_clips.Count == 0) return; var dialog = new OpenFolderDialog { Title = "Choose folder for exported clips", InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return;
-        var outputs = new StringCollection(); await RunBusyAsync("Batch exporting…", async token => { for (var i = 0; i < _clips.Count; i++) { BusyText.Text = $"Exporting {i + 1} of {_clips.Count}…"; BusyProgress.Value = i / (double)_clips.Count; var gif = _mode == ExportMode.Gif; var output = System.IO.Path.Combine(dialog.FolderName, DefaultName(_clips[i], gif)); await _engine.ExportAsync(_clips[i], output, GetOptions(), null, token); outputs.Add(output); } BusyProgress.Value = 1; });
-        if (_settings.AutoCopyExports && outputs.Count > 0) { var data = new DataObject(); data.SetFileDropList(outputs); Clipboard.SetDataObject(data, true); }
+        if (_clips.Count == 0) return Task.CompletedTask;
+        var dialog = new OpenFolderDialog { Title = "Choose folder for exported clips", InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
+        var gif = _mode == ExportMode.Gif; var options = GetClipOptions(); var folder = dialog.FolderName;
+        var items = _clips.Select(clip => (Clip: CloneClip(clip), Output: System.IO.Path.Combine(folder, DefaultName(clip, gif)))).ToArray();
+        var copyToClipboard = _settings.AutoCopyExports;
+        StartExportJob($"Batch export ({items.Length} clips)", folder, async (progress, token) =>
+        {
+            for (var i = 0; i < items.Length; i++)
+            {
+                var index = i;
+                var relay = new Progress<ExportProgress>(value => progress.Report(new((index + value.Fraction) / items.Length, $"Clip {index + 1} of {items.Length}: {value.Stage}")));
+                await _engine.ExportAsync(items[index].Clip, items[index].Output, options, relay, token);
+            }
+        }, _ =>
+        {
+            if (!copyToClipboard) return;
+            var written = new StringCollection(); foreach (var item in items) if (File.Exists(item.Output)) written.Add(item.Output);
+            if (written.Count == 0) return; var data = new DataObject(); data.SetFileDropList(written); Clipboard.SetDataObject(data, true);
+        });
+        return Task.CompletedTask;
     }
 
-    private async Task StitchAsync()
+    private Task StitchAsync()
     {
-        if (_clips.Count == 0) return; var extension = VideoExtension; var dialog = new SaveFileDialog { FileName = $"Post_Video_{DateTime.Now:yyyyMMdd_HHmmss}.{extension}", Filter = VideoFilter(extension), DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return;
-        await RunBusyAsync("Stitching montage…", token => _engine.StitchAsync(_clips, dialog.FileName, GetOptions(), token)); if (File.Exists(dialog.FileName) && _settings.AutoCopyExports) CopyFile(dialog.FileName);
+        if (_clips.Count == 0) return Task.CompletedTask;
+        var extension = VideoExtension; var dialog = new SaveFileDialog { FileName = $"Post_Video_{DateTime.Now:yyyyMMdd_HHmmss}.{extension}", Filter = VideoFilter(extension), DefaultExt = extension, AddExtension = true, InitialDirectory = _settings.DefaultOutputFolder }; if (dialog.ShowDialog(this) != true) return Task.CompletedTask;
+        var options = GetClipOptions(); var output = dialog.FileName; var clips = _clips.Select(CloneClip).ToArray(); var copyToClipboard = _settings.AutoCopyExports;
+        StartExportJob($"Montage ({clips.Length} clips)", output, (progress, token) => _engine.StitchAsync(clips, output, options, progress, token), job => FinishExportedFile(job, copyToClipboard));
+        return Task.CompletedTask;
     }
 
     private static void CopyFile(string path) { var files = new StringCollection { path }; var data = new DataObject(); data.SetFileDropList(files); Clipboard.SetDataObject(data, true); }

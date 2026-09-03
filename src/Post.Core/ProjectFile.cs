@@ -2,14 +2,19 @@ using System.Text.Json;
 
 namespace Post.Core;
 
-public sealed record PostProjectDocument(int Version, string Name, double WorkspaceSeconds, bool RenderWorkspaceTailAsBlack, ProjectClipDocument[] Clips, ProjectLayerDocument[] Layers);
+public sealed record PostProjectDocument(int Version, string Name, double WorkspaceSeconds, bool RenderWorkspaceTailAsBlack, ProjectClipDocument[] Clips, ProjectLayerDocument[] Layers,
+    ProjectEffectDocument[]? OutputEffects = null, ProjectEqualizerDocument? Equalizer = null);
+public sealed record ProjectEqualizerDocument(bool IsEnabled, double GainDb, ProjectEqualizerBandDocument[] Bands);
+public sealed record ProjectEqualizerBandDocument(double FrequencyHz, double GainDb, double Width);
 public sealed record ProjectClipDocument(string SourcePath, ProjectSegmentDocument[] Segments);
 public sealed record ProjectSegmentDocument(double StartSeconds, double EndSeconds);
 public sealed record ProjectLayerDocument(string Name, bool IsVisible, bool IsMuted, ProjectPlacementDocument[] Placements,
     TimelineLayerKind Kind = TimelineLayerKind.Video, ProjectGraphicsDocument[]? Graphics = null,
-    bool MuteLeftChannel = false, bool MuteRightChannel = false);
+    bool MuteLeftChannel = false, bool MuteRightChannel = false, double Volume = 1);
 public sealed record ProjectPlacementDocument(int ClipIndex, double StartSeconds, double InSeconds = 0, double? DurationSeconds = null,
-    ProjectKeyframeDocument[]? Keyframes = null);
+    ProjectKeyframeDocument[]? Keyframes = null, ProjectEffectDocument[]? Effects = null);
+public sealed record ProjectEffectDocument(VideoEffectKind Kind, bool IsEnabled = true, double Amount = .5,
+    double Brightness = 0, double Contrast = 1, double Saturation = 1, double Gamma = 1, double Hue = 0, string? FilePath = null);
 public sealed record ProjectGraphicsDocument(GraphicsOverlayKind Kind, string Text, string? ImagePath, string FontFamily,
     double FontSize, string Foreground, string Background, double Opacity, bool PreserveAspectRatio,
     double X, double Y, double Width, double Height, double StartSeconds, double DurationSeconds,

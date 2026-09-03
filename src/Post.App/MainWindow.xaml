@@ -175,8 +175,9 @@
                             <MenuItem x:Name="KeyframesWindowMenuItem" Header="Keyframe Timeline" IsCheckable="True" Click="ToggleKeyframesWindow_Click"/>
                             <MenuItem x:Name="EffectsWindowMenuItem" Header="Effects" IsCheckable="True" Click="ToggleEffectsWindow_Click"/>
                             <Separator/>
-                            <MenuItem Header="Color Grading (coming soon)" IsEnabled="False"/>
-                            <MenuItem Header="Audio EQ (coming soon)" IsEnabled="False"/>
+                            <MenuItem x:Name="ColorGradingWindowMenuItem" Header="Color Grading" IsCheckable="True" Click="ToggleColorGradingWindow_Click"/>
+                            <MenuItem x:Name="EqualizerWindowMenuItem" Header="Audio EQ" IsCheckable="True" Click="ToggleEqualizerWindow_Click"/>
+                            <MenuItem x:Name="AnimationsWindowMenuItem" Header="Animations" IsCheckable="True" Click="ToggleAnimationsWindow_Click"/>
                         </MenuItem>
                         <Separator/>
                         <MenuItem Header="Export Settings…" Click="ExportSettings_Click"/>
@@ -206,10 +207,20 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="ProjectTabBar" Orientation="Horizontal"/>
                 </ScrollViewer>
+                <Button x:Name="ExportJobsChip" Grid.Column="2" Style="{StaticResource PillButton}" Visibility="Collapsed" Margin="8,0,0,0" Padding="10,4" Click="ExportJobs_Click" ToolTip="Show background exports">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="ExportJobsChipIcon" Text="⏳" FontSize="13" Margin="0,0,7,0"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="ExportJobsChipText" Text="Exporting…" FontSize="12" FontWeight="SemiBold"/>
+                            <ProgressBar x:Name="ExportJobsChipBar" Width="132" Height="4" Margin="0,3,0,0" Minimum="0" Maximum="1" Background="#0A1526" BorderThickness="0" Foreground="{StaticResource CyanBrush}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Button>
             </Grid>
         </Border>
         <Grid Grid.Row="2">
@@ -367,6 +378,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="⚙ Export Settings" Click="ExportSettings_Click"/>
+                    <Button Content="Publish" Click="Publish_Click" Background="#1D5E52" Foreground="White" BorderBrush="#43C4AC" FontWeight="SemiBold" ToolTip="Render and upload to a connected account"/>
                     <Button Content="Export Audio" Click="ExportAudio_Click" Background="#5C439D" Foreground="White" BorderBrush="#AA8BE8" FontWeight="SemiBold"/>
                     <Button Content="Export Video" Style="{StaticResource AccentButton}" Click="Export_Click"/>
                 </StackPanel>
