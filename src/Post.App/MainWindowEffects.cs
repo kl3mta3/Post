@@ -1,4 +1,4 @@
-using Post.Core;
+﻿using Post.Core;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
@@ -12,7 +12,7 @@ namespace Post.App;
 public partial class MainWindow
 {
     private ColorGradingWindow? _colorGradingWindow;
-    private EqualizerWindow? _equalizerWindow;
+    private EqualizerPanel? _equalizerPanel;
     private VideoEffect? _pendingPreviewEffect;
     private Guid? _suppressedPreviewEffectId;
     private string? _lastGradePreview;
@@ -270,25 +270,44 @@ public partial class MainWindow
         try { grade.SaveCube(path, "Post grade"); }
         catch (Exception exception) { MessageBox.Show(this, exception.Message, "Color Grading", MessageBoxButton.OK, MessageBoxImage.Error); return; }
         AddVideoEffect(new VideoEffect { Kind = VideoEffectKind.Lut, FilePath = path }, wholeTimeline);
-        _effectsWindow?.RefreshApplied();
+        _effectsPanel?.RefreshApplied();
     }
 
     // ---- equalizer ----------------------------------------------------------
 
     private void ToggleEqualizerWindow_Click(object sender, RoutedEventArgs e)
     {
-        if (_equalizerWindow is not null) { _equalizerWindow.Close(); return; }
+        if (IsPaneVisible("equalizer")) { HideEqualizerPane(); return; }
         ShowEqualizerWindow();
     }
 
+    /// <summary>Opens Audio EQ, floating on first use so it behaves like the window it was.</summary>
     private void ShowEqualizerWindow()
     {
-        if (_equalizerWindow is not null) { _equalizerWindow.Activate(); return; }
         EnsureProjectHistory();
-        // Sliders move continuously, so the edit is recorded once when the window closes.
-        _equalizerWindow = new EqualizerWindow(_composition.Equalizer, EqualizerChanged, this);
-        _equalizerWindow.Closed += (_, _) => { _equalizerWindow = null; CommitProjectEdit(); if (EqualizerWindowMenuItem is not null) EqualizerWindowMenuItem.IsChecked = false; };
-        EqualizerWindowMenuItem.IsChecked = true; _equalizerWindow.Show();
+        OpenToolPane("equalizer", "Audio EQ", 720, 480);
+        EqualizerWindowMenuItem.IsChecked = true;
+    }
+
+    private EqualizerPanel BuildEqualizerPanel()
+    {
+        if (_equalizerPanel is null)
+        {
+            _equalizerPanel = new EqualizerPanel(_composition.Equalizer, EqualizerChanged);
+            _equalizerPanel.CloseRequested = HideEqualizerPane;
+        }
+        return _equalizerPanel;
+    }
+
+    /// <summary>
+    /// Sliders move continuously, so the edit is recorded once when the pane is put away
+    /// rather than on every nudge.
+    /// </summary>
+    private void HideEqualizerPane()
+    {
+        ClosePane("equalizer");
+        CommitProjectEdit();
+        if (EqualizerWindowMenuItem is not null) EqualizerWindowMenuItem.IsChecked = false;
     }
 
     // ---- equalized preview proxies -----------------------------------------
@@ -326,7 +345,7 @@ public partial class MainWindow
             // A rendered composite carries baked-in audio, so it is only stale once the
             // mixer stops covering it.
             if (_compositionPreviewActive && !PreviewAudioEngaged) InvalidateCompositionPreview();
-            _equalizerWindow?.SetStatus(PreviewAudioEngaged
+            _equalizerPanel?.SetStatus(PreviewAudioEngaged
                 ? "Live — the preview mixer is applying this as you drag."
                 : "");
             return;
@@ -393,7 +412,7 @@ public partial class MainWindow
         if (!engine.Start())
         {
             engine.Dispose();
-            _equalizerWindow?.SetStatus("No audio output device was available, so the preview falls back to a rendered copy.");
+            _equalizerPanel?.SetStatus("No audio output device was available, so the preview falls back to a rendered copy.");
             return;
         }
         _previewAudio = engine;
@@ -485,7 +504,7 @@ public partial class MainWindow
             if (signature.Length == 0)
             {
                 _equalizedSignature = ""; if (_equalizedPreviews.Count == 0) return;
-                _equalizedPreviews.Clear(); _equalizerWindow?.SetStatus("Equalizer is flat — the preview plays the original audio.");
+                _equalizedPreviews.Clear(); _equalizerPanel?.SetStatus("Equalizer is flat — the preview plays the original audio.");
                 await RestartLivePreviewAsync(); return;
             }
 
@@ -494,7 +513,7 @@ public partial class MainWindow
                 .Distinct().ToArray();
             if (clips.Length == 0) { _equalizedSignature = signature; return; }
 
-            _equalizerWindow?.SetStatus($"Preparing equalized preview for {clips.Length} clip{(clips.Length == 1 ? "" : "s")}…");
+            _equalizerPanel?.SetStatus($"Preparing equalized preview for {clips.Length} clip{(clips.Length == 1 ? "" : "s")}…");
             var built = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var clip in clips)
             {
@@ -504,11 +523,11 @@ public partial class MainWindow
             if (work.IsCancellationRequested) return;
             _equalizedPreviews.Clear(); foreach (var item in built) _equalizedPreviews[item.Key] = item.Value;
             _equalizedSignature = signature;
-            _equalizerWindow?.SetStatus("Equalized preview ready — the player now uses it.");
+            _equalizerPanel?.SetStatus("Equalized preview ready — the player now uses it.");
             await RestartLivePreviewAsync();
         }
         catch (OperationCanceledException) { }
-        catch (Exception exception) { _equalizerWindow?.SetStatus($"Could not build the equalized preview: {exception.Message}"); }
+        catch (Exception exception) { _equalizerPanel?.SetStatus($"Could not build the equalized preview: {exception.Message}"); }
         finally { if (ReferenceEquals(_equalizedPreviewWork, work)) _equalizedPreviewWork = null; work.Dispose(); }
     }
 

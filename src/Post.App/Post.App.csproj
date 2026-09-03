@@ -29,6 +29,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Dirkster.AvalonDock" Version="4.74.1" />
+    <PackageReference Include="Dirkster.AvalonDock.Themes.VS2013" Version="4.74.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.151.1" />
     <PackageReference Include="SkiaSharp.Skottie" Version="4.151.1" />

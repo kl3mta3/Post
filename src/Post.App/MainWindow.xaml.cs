@@ -1,4 +1,4 @@
-using Post.Core;
+﻿using Post.Core;
 using Microsoft.Win32;
 using System.Collections.Specialized;
 using System.Diagnostics;
@@ -38,13 +38,13 @@ public partial class MainWindow : Window
         Guid? AutomaticPlacementId, TimeSpan SequencePosition, TimeSpan EditPosition, VideoEffect[] OutputEffects, AudioEqualizer Equalizer);
     private sealed record ClipState(ClipItem Clip, ClipSnapshot Snapshot);
     private sealed record LayerState(Guid Id, string Name, bool IsVisible, bool IsMuted, bool MuteLeftChannel, bool MuteRightChannel, TimelineLayerKind Kind,
-        PlacementState[] Placements, GraphicState[] Graphics, double Volume = 1);
-    private sealed record PlacementState(Guid Id, ClipItem Clip, TimeSpan Start, TimeSpan InPoint, TimeSpan? Length, KeyframeState[] Keyframes, VideoEffect[] Effects);
+        PlacementState[] Placements, GraphicState[] Graphics, double Volume = 1, double AnchorX = .5, double AnchorY = .5);
+    private sealed record PlacementState(Guid Id, ClipItem Clip, TimeSpan Start, TimeSpan InPoint, TimeSpan? Length, KeyframeState[] Keyframes, VideoEffect[] Effects, double Spin = 0);
     private sealed record GraphicState(Guid Id, GraphicsOverlayKind Kind, string Text, string? ImagePath,
         string? RenderedImagePath, string FontFamily, double FontSize, string Foreground, string Background,
         string FillColor1, string FillColor2, bool UseSecondFillColor, GraphicGradientKind GradientKind, double GradientAngle,
         double Opacity, bool PreserveAspectRatio, double X, double Y, double Width, double Height,
-        TimeSpan Start, TimeSpan Duration, KeyframeState[] Keyframes);
+        TimeSpan Start, TimeSpan Duration, KeyframeState[] Keyframes, double Spin = 0);
     private sealed record KeyframeState(Guid Id, KeyframeProperty Property, TimeSpan Offset, double Value, KeyframeInterpolation Interpolation);
     private sealed record PlacementClipboard(ClipItem Clip, TimelineLayerKind Kind, TimeSpan InPoint, TimeSpan Length, KeyframeState[] Keyframes);
 
@@ -133,7 +133,10 @@ public partial class MainWindow : Window
     private double _mediaPanelWidth = 280;
     private GridLength _layersPanelHeight = new(300);
     private KeyframeEditor? _keyframeWindow;
-    private EffectsWindow? _effectsWindow;
+    private KeyframeTimeline? _keyframeStrip;
+    private double _keyframeStripHeight = 186;
+    private bool _keyframeStripOpen;
+    private EffectsPanel? _effectsPanel;
 
     public MainWindow()
     {
@@ -145,6 +148,7 @@ public partial class MainWindow : Window
         Panel.SetZIndex(WaveformCanvas, 3); Panel.SetZIndex(CutOverlay, 4);
         _tools = FfmpegLocator.Find(); var runner = new ProcessRunner(); _probe = new(_tools, runner); _engine = new(_tools, runner); _engine.EncoderPreference = _settings.VideoEncoder;
         EnsureProjectHistory(); InitializeExportJobs();
+        _keyframeStrip = new KeyframeTimeline(showList: false); KeyframeStrip.Child = _keyframeStrip;
         _timer.Tick += Timer_Tick; _timer.Start(); PreviewVolume.Value = _settings.PreviewVolume;
         _audioPreviewPlayer.MediaOpened += AudioPreviewPlayer_MediaOpened;
         _audioPreviewPlayer.MediaEnded += (_, _) => { if (_projectMediaAudioPreviewActive) { if (_loop) { _audioPreviewPlayer.Position = TimeSpan.Zero; _audioPreviewPlayer.Play(); } else Pause(); } };
@@ -310,7 +314,7 @@ public partial class MainWindow : Window
         if (_current is not null) await SwitchClipAsync(_current, CancellationToken.None);
         else
         {
-            Player.Source = null; DropPanel.Visibility = Visibility.Visible; MarkerText.Text = "KEEP: 00:00.000"; CurrentText.Text = "00:00.000"; DurationText.Text = " / 00:00"; _waveformImage = null; DrawCuts(); RefreshLayerStack();
+            Player.Source = null; DropPanel.Visibility = Visibility.Visible; MarkerText.Text = "KEEP: 00:00.000"; WorkAreaText.Text = "  •  WORK: 00:00"; CurrentText.Text = "00:00.000"; DurationText.Text = " / 00:00"; _waveformImage = null; DrawCuts(); RefreshLayerStack();
         }
     }
 
@@ -363,12 +367,12 @@ public partial class MainWindow : Window
                 foreach (var savedLayer in dto.Layers)
                 {
                     var legacyAudioMute = savedLayer.Kind == TimelineLayerKind.Audio && savedLayer.IsMuted && !savedLayer.MuteLeftChannel && !savedLayer.MuteRightChannel;
-                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind, Volume = savedLayer.Volume }; project.Composition.Layers.Add(layer);
-                    foreach (var savedPlacement in savedLayer.Placements) if (savedPlacement.ClipIndex >= 0 && savedPlacement.ClipIndex < clipMap.Length && clipMap[savedPlacement.ClipIndex] is { } clip) { var placement = TimelineOperations.AddPlacement(layer, clip, TimeSpan.FromSeconds(Math.Max(0, savedPlacement.StartSeconds))); placement.InPoint = TimeSpan.FromSeconds(Math.Max(0, savedPlacement.InSeconds)); placement.Length = savedPlacement.DurationSeconds is { } length ? TimeSpan.FromSeconds(Math.Max(0, length)) : null; foreach (var keyframe in savedPlacement.Keyframes ?? []) placement.Keyframes.Add(FromDocument(keyframe, placement.Duration)); foreach (var effect in savedPlacement.Effects ?? []) placement.Effects.Add(FromDocument(effect)); }
+                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind, Volume = savedLayer.Volume, AnchorX = savedLayer.AnchorX, AnchorY = savedLayer.AnchorY }; project.Composition.Layers.Add(layer);
+                    foreach (var savedPlacement in savedLayer.Placements) if (savedPlacement.ClipIndex >= 0 && savedPlacement.ClipIndex < clipMap.Length && clipMap[savedPlacement.ClipIndex] is { } clip) { var placement = TimelineOperations.AddPlacement(layer, clip, TimeSpan.FromSeconds(Math.Max(0, savedPlacement.StartSeconds))); placement.SpinDegreesPerSecond = savedPlacement.SpinDegreesPerSecond; placement.InPoint = TimeSpan.FromSeconds(Math.Max(0, savedPlacement.InSeconds)); placement.Length = savedPlacement.DurationSeconds is { } length ? TimeSpan.FromSeconds(Math.Max(0, length)) : null; foreach (var keyframe in savedPlacement.Keyframes ?? []) placement.Keyframes.Add(FromDocument(keyframe, placement.Duration)); foreach (var effect in savedPlacement.Effects ?? []) placement.Effects.Add(FromDocument(effect)); }
                     foreach (var saved in savedLayer.Graphics ?? [])
                     {
                         if (saved.Kind is GraphicsOverlayKind.Image or GraphicsOverlayKind.Lottie && (string.IsNullOrWhiteSpace(saved.ImagePath) || !File.Exists(saved.ImagePath))) { if (!string.IsNullOrWhiteSpace(saved.ImagePath)) missing.Add(saved.ImagePath); continue; }
-                        var graphic = new GraphicsOverlay { Kind = saved.Kind, Text = saved.Text, ImagePath = saved.ImagePath, FontFamily = saved.FontFamily, FontSize = saved.FontSize, Foreground = saved.Foreground, Background = saved.Background, FillColor1 = saved.FillColor1, FillColor2 = saved.FillColor2, UseSecondFillColor = saved.UseSecondFillColor, GradientKind = saved.GradientKind, GradientAngle = saved.GradientAngle, Opacity = saved.Opacity, PreserveAspectRatio = saved.PreserveAspectRatio, X = saved.X, Y = saved.Y, Width = saved.Width, Height = saved.Height, Start = TimeSpan.FromSeconds(Math.Max(0, saved.StartSeconds)), Duration = TimeSpan.FromSeconds(Math.Max(.1, saved.DurationSeconds)) };
+                        var graphic = new GraphicsOverlay { Kind = saved.Kind, Text = saved.Text, ImagePath = saved.ImagePath, FontFamily = saved.FontFamily, FontSize = saved.FontSize, Foreground = saved.Foreground, Background = saved.Background, FillColor1 = saved.FillColor1, FillColor2 = saved.FillColor2, UseSecondFillColor = saved.UseSecondFillColor, GradientKind = saved.GradientKind, GradientAngle = saved.GradientAngle, Opacity = saved.Opacity, PreserveAspectRatio = saved.PreserveAspectRatio, X = saved.X, Y = saved.Y, Width = saved.Width, Height = saved.Height, Start = TimeSpan.FromSeconds(Math.Max(0, saved.StartSeconds)), Duration = TimeSpan.FromSeconds(Math.Max(.1, saved.DurationSeconds)), SpinDegreesPerSecond = saved.SpinDegreesPerSecond };
                         foreach (var keyframe in saved.Keyframes ?? []) graphic.Keyframes.Add(FromDocument(keyframe, graphic.Duration)); layer.Graphics.Add(graphic);
                     }
                 }
@@ -426,8 +430,8 @@ public partial class MainWindow : Window
         var dto = new PostProjectDocument(1, System.IO.Path.GetFileNameWithoutExtension(path), project.Composition.WorkspaceDuration.TotalSeconds, project.Composition.RenderWorkspaceTailAsBlack,
             project.Clips.Select(clip => new ProjectClipDocument(clip.SourcePath, clip.Segments.Select(segment => new ProjectSegmentDocument(segment.SourceStart.TotalSeconds, segment.SourceEnd.TotalSeconds)).ToArray())).ToArray(),
             project.Composition.Layers.Select(layer => new ProjectLayerDocument(layer.Name, layer.IsVisible, layer.IsMuted,
-                layer.Placements.Where(placement => clipIndexes.ContainsKey(placement.Clip)).Select(placement => new ProjectPlacementDocument(clipIndexes[placement.Clip], placement.Start.TotalSeconds, placement.InPoint.TotalSeconds, placement.Duration.TotalSeconds, placement.Keyframes.Select(ToDocument).ToArray(), placement.Effects.Select(ToDocument).ToArray())).ToArray(),
-                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel, layer.Volume)).ToArray(),
+                layer.Placements.Where(placement => clipIndexes.ContainsKey(placement.Clip)).Select(placement => new ProjectPlacementDocument(clipIndexes[placement.Clip], placement.Start.TotalSeconds, placement.InPoint.TotalSeconds, placement.Duration.TotalSeconds, placement.Keyframes.Select(ToDocument).ToArray(), placement.Effects.Select(ToDocument).ToArray(), placement.SpinDegreesPerSecond)).ToArray(),
+                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle, graphic.SpinDegreesPerSecond)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel, layer.Volume, layer.AnchorX, layer.AnchorY)).ToArray(),
             project.Composition.OutputEffects.Select(ToDocument).ToArray(),
             new ProjectEqualizerDocument(project.Composition.Equalizer.IsEnabled, project.Composition.Equalizer.GainDb,
                 project.Composition.Equalizer.Bands.Select(band => new ProjectEqualizerBandDocument(band.FrequencyHz, band.GainDb, band.Width)).ToArray()));
@@ -604,10 +608,10 @@ public partial class MainWindow : Window
     {
         project ??= _project;
         var layers = project.Composition.Layers.Select(layer => new LayerState(layer.Id, layer.Name, layer.IsVisible, layer.IsMuted, layer.MuteLeftChannel, layer.MuteRightChannel, layer.Kind,
-            layer.Placements.Select(item => new PlacementState(item.Id, item.Clip, item.Start, item.InPoint, item.Length, item.Keyframes.Select(ToState).ToArray(), item.Effects.Select(effect => effect.Clone()).ToArray())).ToArray(),
+            layer.Placements.Select(item => new PlacementState(item.Id, item.Clip, item.Start, item.InPoint, item.Length, item.Keyframes.Select(ToState).ToArray(), item.Effects.Select(effect => effect.Clone()).ToArray(), item.SpinDegreesPerSecond)).ToArray(),
             layer.Graphics.Select(item => new GraphicState(item.Id, item.Kind, item.Text, item.ImagePath, item.RenderedImagePath,
                 item.FontFamily, item.FontSize, item.Foreground, item.Background, item.FillColor1, item.FillColor2, item.UseSecondFillColor, item.GradientKind, item.GradientAngle, item.Opacity, item.PreserveAspectRatio,
-                item.X, item.Y, item.Width, item.Height, item.Start, item.Duration, item.Keyframes.Select(ToState).ToArray())).ToArray(), layer.Volume)).ToArray();
+                item.X, item.Y, item.Width, item.Height, item.Start, item.Duration, item.Keyframes.Select(ToState).ToArray(), item.SpinDegreesPerSecond)).ToArray(), layer.Volume, layer.AnchorX, layer.AnchorY)).ToArray();
         return new(project.Clips.Select(clip => new ClipState(clip, clip.Snapshot())).ToArray(), layers,
             project.Composition.WorkspaceDuration, project.Composition.RenderWorkspaceTailAsBlack,
             _activeLayerId, _selectedPlacementId, _selectedGraphicId, project.AutomaticPlacementId, _sequencePosition, _editPosition,
@@ -631,9 +635,9 @@ public partial class MainWindow : Window
         _composition.Layers.Clear();
         foreach (var saved in state.Layers)
         {
-            var layer = new TimelineLayer { Id = saved.Id, Name = saved.Name, IsVisible = saved.IsVisible, IsMuted = saved.IsMuted, MuteLeftChannel = saved.MuteLeftChannel, MuteRightChannel = saved.MuteRightChannel, Kind = saved.Kind, Volume = saved.Volume };
-            foreach (var item in saved.Placements) { var placement = new TimelinePlacement { Id = item.Id, Clip = item.Clip, Start = item.Start, InPoint = item.InPoint, Length = item.Length }; foreach (var keyframe in item.Keyframes) placement.Keyframes.Add(FromState(keyframe)); foreach (var effect in item.Effects) placement.Effects.Add(effect.Clone()); layer.Placements.Add(placement); }
-            foreach (var item in saved.Graphics) { var graphic = new GraphicsOverlay { Id = item.Id, Kind = item.Kind, Text = item.Text, ImagePath = item.ImagePath, RenderedImagePath = item.RenderedImagePath, FontFamily = item.FontFamily, FontSize = item.FontSize, Foreground = item.Foreground, Background = item.Background, FillColor1 = item.FillColor1, FillColor2 = item.FillColor2, UseSecondFillColor = item.UseSecondFillColor, GradientKind = item.GradientKind, GradientAngle = item.GradientAngle, Opacity = item.Opacity, PreserveAspectRatio = item.PreserveAspectRatio, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height, Start = item.Start, Duration = item.Duration }; foreach (var keyframe in item.Keyframes) graphic.Keyframes.Add(FromState(keyframe)); layer.Graphics.Add(graphic); }
+            var layer = new TimelineLayer { Id = saved.Id, Name = saved.Name, IsVisible = saved.IsVisible, IsMuted = saved.IsMuted, MuteLeftChannel = saved.MuteLeftChannel, MuteRightChannel = saved.MuteRightChannel, Kind = saved.Kind, Volume = saved.Volume, AnchorX = saved.AnchorX, AnchorY = saved.AnchorY };
+            foreach (var item in saved.Placements) { var placement = new TimelinePlacement { Id = item.Id, Clip = item.Clip, Start = item.Start, InPoint = item.InPoint, Length = item.Length, SpinDegreesPerSecond = item.Spin }; foreach (var keyframe in item.Keyframes) placement.Keyframes.Add(FromState(keyframe)); foreach (var effect in item.Effects) placement.Effects.Add(effect.Clone()); layer.Placements.Add(placement); }
+            foreach (var item in saved.Graphics) { var graphic = new GraphicsOverlay { Id = item.Id, Kind = item.Kind, Text = item.Text, ImagePath = item.ImagePath, RenderedImagePath = item.RenderedImagePath, FontFamily = item.FontFamily, FontSize = item.FontSize, Foreground = item.Foreground, Background = item.Background, FillColor1 = item.FillColor1, FillColor2 = item.FillColor2, UseSecondFillColor = item.UseSecondFillColor, GradientKind = item.GradientKind, GradientAngle = item.GradientAngle, Opacity = item.Opacity, PreserveAspectRatio = item.PreserveAspectRatio, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height, Start = item.Start, Duration = item.Duration, SpinDegreesPerSecond = item.Spin }; foreach (var keyframe in item.Keyframes) graphic.Keyframes.Add(FromState(keyframe)); layer.Graphics.Add(graphic); }
             _composition.Layers.Add(layer);
         }
         _composition.OutputEffects.Clear(); foreach (var effect in state.OutputEffects) _composition.OutputEffects.Add(effect.Clone());
@@ -662,7 +666,7 @@ public partial class MainWindow : Window
         var duration = _composition.OutputDuration > TimeSpan.Zero ? _composition.OutputDuration : _composition.DisplayDuration;
         if (duration <= TimeSpan.Zero) duration = _current?.SelectedDuration ?? TimeSpan.Zero;
         MarkerText.Text = $"PROJECT: {TimeText.Format(duration)}"; CurrentText.Text = $"PLAY {TimeText.Format(_sequencePosition)}"; DurationText.Text = $"  EDIT {TimeText.Format(_editPosition)} / {duration.ToString(@"mm\:ss")}";
-        CompositionStatus.Text = $"  •  LAYERS: {_composition.Layers.Count}  •  WORK: {FormatWholeSeconds(_composition.DisplayDuration)}";
+        CompositionStatus.Text = $"  •  LAYERS: {_composition.Layers.Count}"; WorkAreaText.Text = $"  •  WORK: {FormatWholeSeconds(_composition.DisplayDuration)}";
         _viewStart = TimeSpan.Zero; _timelineUpdating = true; Timeline.Minimum = 0; Timeline.Maximum = Math.Max(.001, duration.TotalSeconds); Timeline.Value = Math.Min(duration.TotalSeconds, _sequencePosition.TotalSeconds); _timelineUpdating = false; UpdateLayerPlayheads(); DrawCuts();
     }
     private void Timer_Tick(object? sender, EventArgs e)
@@ -759,6 +763,9 @@ public partial class MainWindow : Window
         _editPosition = ClampTime(position, TimeSpan.Zero, VisibleDuration);
         if (_livePreviewActive) { UpdateLivePlayers(_editPosition, false); UpdateLiveGraphics(_editPosition); }
         UpdateProjectUi();
+        if (_keyframeStrip is not null && SelectedKeyframeTarget() is { } keyframeTarget)
+            _keyframeStrip.SetCaretFromOutside(_editPosition - keyframeTarget.Start);
+        _keyframeWindow?.SetCaret(_editPosition - (SelectedKeyframeTarget()?.Start ?? TimeSpan.Zero));
         _ = ShowCurrentProjectFrameAsync();
     }
 
@@ -1089,9 +1096,23 @@ public partial class MainWindow : Window
                 var scale = KeyframeEvaluator.Evaluate(graphic.Keyframes, KeyframeProperty.Scale, offset, 1);
                 var x = KeyframeEvaluator.Evaluate(graphic.Keyframes, KeyframeProperty.PositionX, offset, graphic.X); var y = KeyframeEvaluator.Evaluate(graphic.Keyframes, KeyframeProperty.PositionY, offset, graphic.Y);
                 element.Width = Math.Max(2, graphic.Width * width * scale); element.Height = Math.Max(2, graphic.Height * height * scale); element.Opacity = Math.Clamp(KeyframeEvaluator.Evaluate(graphic.Keyframes, KeyframeProperty.Opacity, offset, graphic.Opacity), 0, 1);
+                ApplyPreviewRotation(element, graphic.Keyframes, graphic.SpinDegreesPerSecond, offset, layer);
                 Canvas.SetLeft(element, x * width); Canvas.SetTop(element, y * height); Panel.SetZIndex(element, z++); _liveGraphicsHost.Children.Add(element);
             }
         }
+    }
+
+    /// <summary>
+    /// Turns a previewed item the same way the export will: about the layer's anchor,
+    /// combining any constant spin with the rotation keyframes.
+    /// </summary>
+    private static void ApplyPreviewRotation(FrameworkElement element, IReadOnlyCollection<AnimationKeyframe> keyframes, double spinDegreesPerSecond, TimeSpan offset, TimelineLayer layer)
+    {
+        var degrees = spinDegreesPerSecond * offset.TotalSeconds
+            + KeyframeEvaluator.Evaluate(keyframes, KeyframeProperty.Rotation, offset, 0);
+        if (Math.Abs(degrees % 360) < .0001 && Math.Abs(degrees) < .0001) { element.RenderTransform = null; return; }
+        element.RenderTransformOrigin = new Point(Math.Clamp(layer.AnchorX, 0, 1), Math.Clamp(layer.AnchorY, 0, 1));
+        element.RenderTransform = new RotateTransform(degrees);
     }
 
     private static Brush GraphicBrush(string value, Brush fallback)
@@ -1152,6 +1173,7 @@ public partial class MainWindow : Window
     private void RefreshLayerStack()
     {
         if (LayerStack is null || CompositionScroll is null) return;
+        RefreshKeyframeStrip();
         if (_composition.Layers.Count == 0)
         {
             LayerStack.Children.Clear(); _layerPlayheads.Clear(); _layerEditCarets.Clear();
@@ -1160,7 +1182,9 @@ public partial class MainWindow : Window
             empty.DragOver += LayersArea_DragOver;
             empty.Drop += LayersArea_Drop;
             LayerStack.Children.Add(empty);
-            if (CompositionStatus is not null) CompositionStatus.Text = "  •  LAYERS: 0  •  WORK: 00:00"; return;
+            if (CompositionStatus is not null) CompositionStatus.Text = "  •  LAYERS: 0";
+            if (WorkAreaText is not null) WorkAreaText.Text = "  •  WORK: 00:00";
+            return;
         }
         var display = _composition.DisplayDuration <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : _composition.DisplayDuration;
         const double rowHeight = 74; const double splitterWidth = 5;
@@ -1175,9 +1199,11 @@ public partial class MainWindow : Window
             var row = new Grid { Height = rowHeight, Width = _layerHeaderWidth + splitterWidth + laneWidth, HorizontalAlignment = HorizontalAlignment.Left, Background = new SolidColorBrush(layerIndex % 2 == 0 ? Color.FromRgb(9, 25, 46) : Color.FromRgb(12, 30, 52)) };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(_layerHeaderWidth), MinWidth = 130, MaxWidth = 420 }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(splitterWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(laneWidth) });
             var header = new Border { BorderBrush = layer.Id == _activeLayerId ? (Brush)FindResource("CyanBrush") : (Brush)FindResource("BorderBrush"), BorderThickness = new Thickness(0, 0, 1, 1), Padding = new Thickness(4, 2, 4, 2) };
-            header.ContextMenu = CreateLayerMenu(layer);
+            var layerMenu = CreateLayerMenu(layer);
+            header.ContextMenu = layerMenu;
             var controls = new Grid(); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) }); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) }); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
             var name = new TextBox { Text = layer.Name, Padding = new Thickness(3, 1, 3, 1), Margin = new Thickness(0), FontSize = 11, FontWeight = FontWeights.SemiBold, Background = new SolidColorBrush(Color.FromArgb(45, 70, 120, 160)), BorderThickness = new Thickness(0), Foreground = Brushes.White, ToolTip = "Click to select and rename this layer" };
+            name.ContextMenu = layerMenu;
             name.GotKeyboardFocus += (_, _) => { _activeLayerId = layer.Id; name.SelectAll(); };
             name.LostKeyboardFocus += (_, _) => { var value = name.Text.Trim(); if (!string.IsNullOrWhiteSpace(value) && value != layer.Name) { EnsureProjectHistory(); layer.Name = value; CommitProjectEdit(); } else name.Text = layer.Name; };
             name.KeyDown += (_, e) => { if (e.Key == Key.Enter) { var value = name.Text.Trim(); if (!string.IsNullOrWhiteSpace(value)) layer.Name = value; Keyboard.ClearFocus(); e.Handled = true; } };
@@ -1208,6 +1234,7 @@ public partial class MainWindow : Window
             if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(playLayer); buttons.Children.Add(up); buttons.Children.Add(down);
             if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(BuildLayerVolume(layer));
             buttons.Children.Add(removeLayer); Grid.SetRow(buttons, 2);
+            controls.ContextMenu = layerMenu;
             controls.Children.Add(name); controls.Children.Add(toggles); controls.Children.Add(buttons); header.Child = controls; row.Children.Add(header);
 
             var headerResize = new Thumb { Width = splitterWidth, Cursor = Cursors.SizeWE, Background = new SolidColorBrush(Color.FromRgb(47, 89, 114)), ToolTip = "Drag to resize layer headers" };
@@ -1289,8 +1316,9 @@ public partial class MainWindow : Window
             Grid.SetColumn(lane, 2); row.Children.Add(lane); LayerStack.Children.Add(row);
         }
         UpdateLayerPlayheads();
-        _effectsWindow?.RefreshApplied();
-        if (CompositionStatus is not null) CompositionStatus.Text = $"  •  LAYERS: {_composition.Layers.Count}  •  WORK: {FormatWholeSeconds(_composition.DisplayDuration)}";
+        _effectsPanel?.RefreshApplied();
+        if (CompositionStatus is not null) CompositionStatus.Text = $"  •  LAYERS: {_composition.Layers.Count}";
+        if (WorkAreaText is not null) WorkAreaText.Text = $"  •  WORK: {FormatWholeSeconds(_composition.DisplayDuration)}";
     }
 
     private void ResizeLayerHeaders(double delta, double laneWidth, double splitterWidth)
@@ -1441,21 +1469,48 @@ public partial class MainWindow : Window
         var split = new MenuItem { Header = "Cut / split at playhead" }; split.Click += (_, _) => { _selectedPlacementId = placement.Id; SplitSelectedPlacement(); };
         var keyframes = new MenuItem { Header = "Keyframes…" }; keyframes.Click += (_, _) => { _activeLayerId = layer.Id; _selectedPlacementId = placement.Id; _selectedGraphicId = null; Keyframe_Click(this, new RoutedEventArgs()); };
         var effects = new MenuItem { Header = "Effects…" }; effects.Click += (_, _) => { _activeLayerId = layer.Id; _selectedPlacementId = placement.Id; _selectedGraphicId = null; EnsureEffectsWindow(); };
+        var spin = new MenuItem { Header = "Spin…" }; spin.Click += (_, _) => SetSpin(placement.Clip.DisplayName, placement.SpinDegreesPerSecond, value => placement.SpinDegreesPerSecond = value);
         var export = new MenuItem { Header = "Export this clip…" }; export.Click += (_, _) => _ = ExportPlacementAsync(placement);
         var gifDuration = placement.Duration < QuickGifMaximumDuration ? placement.Duration : QuickGifMaximumDuration;
         var exportGif = new MenuItem { Header = placement.Duration > QuickGifMaximumDuration ? $"Export as GIF (first {QuickGifMaximumDuration.TotalSeconds:0}s)…" : "Export as GIF…", IsEnabled = placement.Clip.Media.HasVideo, ToolTip = placement.Clip.Media.HasVideo ? $"Exports up to {QuickGifMaximumDuration.TotalSeconds:0} seconds from this clip's current start." : "GIF export requires a video clip." };
         exportGif.Click += (_, _) => _ = ExportPlacementAsGifAsync(placement, gifDuration);
         var duplicate = new MenuItem { Header = "Duplicate clip to new layer" }; duplicate.Click += (_, _) => DuplicatePlacementToNewLayer(placement);
         var remove = new MenuItem { Header = "Remove clip from layer" }; remove.Click += (_, _) => { EnsureProjectHistory(); TimelineOperations.RemovePlacement(_composition, placement.Id); if (_selectedPlacementId == placement.Id) _selectedPlacementId = null; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); DrawCuts(); };
-        menu.Items.Add(play); menu.Items.Add(new Separator()); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(split); menu.Items.Add(duplicate); menu.Items.Add(export); menu.Items.Add(exportGif); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        menu.Items.Add(play); menu.Items.Add(new Separator()); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(split); menu.Items.Add(duplicate); menu.Items.Add(export); menu.Items.Add(exportGif); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+    }
+
+    /// <summary>
+    /// Sets the point this layer turns and scales about. It is a layer property rather
+    /// than a per-clip one because a layer is the unit people arrange things in here; a
+    /// spinning badge sits on its own graphics layer either way.
+    /// </summary>
+    /// <summary>Asks for a constant turn speed and applies it to one item.</summary>
+    private void SetSpin(string targetName, double current, Action<double> apply)
+    {
+        var window = new SpinWindow(targetName, current, this);
+        if (window.ShowDialog() != true || Math.Abs(window.Speed - current) < .0001) return;
+        EnsureProjectHistory(); apply(window.Speed);
+        InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack();
+        UpdateLiveGraphics(_sequencePosition); _ = ShowCurrentProjectFrameAsync();
+    }
+
+    private void SetAnchorPoint(TimelineLayer layer)
+    {
+        var before = (layer.AnchorX, layer.AnchorY);
+        EnsureProjectHistory();
+        if (new AnchorPointWindow(layer, this).ShowDialog() != true) return;
+        if (Math.Abs(before.AnchorX - layer.AnchorX) < .0001 && Math.Abs(before.AnchorY - layer.AnchorY) < .0001) return;
+        InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack();
+        UpdateLiveGraphics(_sequencePosition); _ = ShowCurrentProjectFrameAsync();
     }
 
     private ContextMenu CreateLayerMenu(TimelineLayer layer)
     {
         var menu = new ContextMenu();
         var duplicate = new MenuItem { Header = "Duplicate layer" }; duplicate.Click += (_, _) => DuplicateLayer(layer);
+        var anchor = new MenuItem { Header = "Set Anchor Point (rotation centre)…" }; anchor.Click += (_, _) => SetAnchorPoint(layer);
         var remove = new MenuItem { Header = "Delete layer" }; remove.Click += (_, _) => RemoveLayer(layer);
-        menu.Items.Add(duplicate); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        menu.Items.Add(duplicate); menu.Items.Add(anchor); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
     }
 
     private void DuplicateLayer(TimelineLayer layer)
@@ -1514,21 +1569,22 @@ public partial class MainWindow : Window
         var edit = new MenuItem { Header = "Edit overlay…" }; edit.Click += (_, _) => { EnsureProjectHistory(); var editor = new GraphicsOverlayEditor(graphic) { Owner = this }; if (editor.ShowDialog() == true) { graphic.RenderedImagePath = null; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); } };
         var keyframes = new MenuItem { Header = "Keyframes…" }; keyframes.Click += (_, _) => { _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; Keyframe_Click(this, new RoutedEventArgs()); };
         var effects = new MenuItem { Header = "Effects…" }; effects.Click += (_, _) => { _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; EnsureEffectsWindow(); };
+        var spin = new MenuItem { Header = "Spin…" }; spin.Click += (_, _) => SetSpin(graphic.Kind == GraphicsOverlayKind.Text ? graphic.Text : "Overlay", graphic.SpinDegreesPerSecond, value => graphic.SpinDegreesPerSecond = value);
         var duplicate = new MenuItem { Header = "Duplicate overlay to new layer" }; duplicate.Click += (_, _) => { EnsureProjectHistory(); var copy = CloneGraphic(graphic); copy.Start = graphic.End; var copyLayer = CreateGraphicsLayer(copy.Kind); copyLayer.Graphics.Add(copy); ExtendWorkspace(copy.End); _activeLayerId = copyLayer.Id; _selectedGraphicId = copy.Id; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); };
         var remove = new MenuItem { Header = "Remove overlay and layer" }; remove.Click += (_, _) => { EnsureProjectHistory(); layer.Graphics.Remove(graphic); TimelineOperations.RemoveLayer(_composition, layer.Id); if (_selectedGraphicId == graphic.Id) _selectedGraphicId = null; _activeLayerId = _composition.Layers.FirstOrDefault()?.Id; ResetEmptyComposition(); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); };
-        menu.Items.Add(edit); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(duplicate); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        menu.Items.Add(edit); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(duplicate); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
     }
 
     private (ICollection<AnimationKeyframe> Keyframes, TimeSpan Start, TimeSpan Duration, KeyframeProperty[] Properties, Func<KeyframeProperty, double> Fallback)? SelectedKeyframeTarget()
     {
         if (_selectedGraphicId is { } graphicId && _composition.Layers.SelectMany(layer => layer.Graphics).FirstOrDefault(item => item.Id == graphicId) is { } graphic)
             return (graphic.Keyframes, graphic.Start, graphic.Duration,
-                [KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Opacity],
+                [KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Rotation, KeyframeProperty.Opacity],
                 property => property switch { KeyframeProperty.PositionX => graphic.X, KeyframeProperty.PositionY => graphic.Y, KeyframeProperty.Scale => 1, KeyframeProperty.Opacity => graphic.Opacity, _ => 0 });
         if (_selectedPlacementId is { } placementId && _composition.Layers.SelectMany(layer => layer.Placements).FirstOrDefault(item => item.Id == placementId) is { } placement)
         {
             var properties = placement.Clip.Media.HasVideo
-                ? (placement.Clip.Media.HasAudio ? new[] { KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Opacity, KeyframeProperty.Volume } : [KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Opacity])
+                ? (placement.Clip.Media.HasAudio ? new[] { KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Rotation, KeyframeProperty.Opacity, KeyframeProperty.Volume } : [KeyframeProperty.PositionX, KeyframeProperty.PositionY, KeyframeProperty.Scale, KeyframeProperty.Rotation, KeyframeProperty.Opacity])
                 : [KeyframeProperty.Volume];
             return (placement.Keyframes, placement.Start, placement.Duration, properties,
                 property => property is KeyframeProperty.PositionX or KeyframeProperty.PositionY ? .5 : 1);
@@ -1536,14 +1592,45 @@ public partial class MainWindow : Window
         return null;
     }
 
+    /// <summary>Describes the selected item for whichever keyframe view is showing it.</summary>
+    private KeyframeBinding BuildKeyframeBinding((ICollection<AnimationKeyframe> Keyframes, TimeSpan Start, TimeSpan Duration, KeyframeProperty[] Properties, Func<KeyframeProperty, double> Fallback) value, string targetName)
+        => new(value.Keyframes, _editPosition - value.Start, value.Duration, value.Properties, value.Fallback, targetName,
+            () => { InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLivePlayers(_editPosition, false); UpdateLiveGraphics(_editPosition); _ = ShowCurrentProjectFrameAsync(); },
+            local => SetEditPosition(value.Start + local),
+            () => ClampTime(_sequencePosition - value.Start, TimeSpan.Zero, value.Duration),
+            () => _playing, FrameDuration);
+
+    private string SelectedKeyframeTargetName()
+        => _selectedGraphicId is not null ? "Selected overlay"
+            : _composition.Layers.SelectMany(layer => layer.Placements).FirstOrDefault(item => item.Id == _selectedPlacementId)?.Clip.DisplayName ?? "Selected item";
+
+    /// <summary>
+    /// Points the pinned strip at whatever is selected now. Called whenever the selection
+    /// or the layer stack changes, so the strip always reflects the current item.
+    /// </summary>
+    private void RefreshKeyframeStrip()
+    {
+        if (_keyframeStrip is null) return;
+        var target = SelectedKeyframeTarget();
+        if (target is { } value) _keyframeStrip.Bind(BuildKeyframeBinding(value, SelectedKeyframeTargetName()));
+        else _keyframeStrip.Unbind();
+        _keyframeWindow?.Refresh();   // the window shows the same item, so keep its list in step
+
+        // Hidden means hidden: no empty box, no splitter. It reopens at whatever height
+        // it was dragged to, and always in the same place above the layers.
+        if (_keyframeStripOpen && KeyframeStripRow.ActualHeight > 1) _keyframeStripHeight = KeyframeStripRow.ActualHeight;
+        KeyframeStrip.Visibility = _keyframeStripOpen ? Visibility.Visible : Visibility.Collapsed;
+        KeyframeStripSplitter.Visibility = _keyframeStripOpen ? Visibility.Visible : Visibility.Collapsed;
+        KeyframeSplitterRow.Height = new GridLength(_keyframeStripOpen ? 5 : 0);
+        KeyframeStripRow.MinHeight = _keyframeStripOpen ? 120 : 0;
+        KeyframeStripRow.Height = new GridLength(_keyframeStripOpen ? Math.Max(120, _keyframeStripHeight) : 0);
+        KeyframeStripButton.FontWeight = _keyframeStripOpen ? FontWeights.Bold : FontWeights.Normal;
+    }
+
     private void Keyframe_Click(object sender, RoutedEventArgs e)
     {
-        var target = SelectedKeyframeTarget();
-        if (target is null) { MessageBox.Show(this, "Select a clip, audio item, text overlay, or image overlay first.", "Keyframes", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var value = target.Value;
-        if (_editPosition < value.Start || _editPosition > value.Start + value.Duration)
-        { MessageBox.Show(this, "Move the white edit caret onto the selected item before adding a keyframe.", "Keyframes", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        ShowKeyframeWindow(value);
+        _keyframeStripOpen = !_keyframeStripOpen;
+        RefreshKeyframeStrip();
     }
 
     private void ShowKeyframeWindow((ICollection<AnimationKeyframe> Keyframes, TimeSpan Start, TimeSpan Duration, KeyframeProperty[] Properties, Func<KeyframeProperty, double> Fallback) value)
@@ -1551,11 +1638,7 @@ public partial class MainWindow : Window
         if (_keyframeWindow is not null) { _keyframeWindow.Close(); _keyframeWindow = null; }
         EnsureProjectHistory();
         var targetName = _selectedGraphicId is not null ? "Selected overlay" : _composition.Layers.SelectMany(layer => layer.Placements).FirstOrDefault(item => item.Id == _selectedPlacementId)?.Clip.DisplayName ?? "Selected item";
-        _keyframeWindow = new KeyframeEditor(value.Keyframes, _editPosition - value.Start, value.Duration, value.Properties, value.Fallback, targetName,
-            () => { InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLivePlayers(_editPosition, false); UpdateLiveGraphics(_editPosition); _ = ShowCurrentProjectFrameAsync(); },
-            local => SetEditPosition(value.Start + local),
-            () => ClampTime(_sequencePosition - value.Start, TimeSpan.Zero, value.Duration),
-            () => _playing, FrameDuration) { Owner = this };
+        _keyframeWindow = new KeyframeEditor(BuildKeyframeBinding(value, targetName)) { Owner = this };
         _keyframeWindow.Closed += (_, _) => { _keyframeWindow = null; if (KeyframesWindowMenuItem is not null) KeyframesWindowMenuItem.IsChecked = false; };
         KeyframesWindowMenuItem.IsChecked = true; _keyframeWindow.Show();
     }
@@ -1572,17 +1655,19 @@ public partial class MainWindow : Window
 
     private void ToggleEffectsWindow_Click(object sender, RoutedEventArgs e)
     {
-        if (_effectsWindow is not null) { _effectsWindow.Close(); return; }
+        if (IsPaneVisible("effects")) { ClosePane("effects"); EffectsWindowMenuItem.IsChecked = false; return; }
         EnsureEffectsWindow();
     }
 
+    /// <summary>Opens Effects, floating on first use so it behaves like the window it was.</summary>
     private void EnsureEffectsWindow()
     {
-        if (_effectsWindow is not null) { _effectsWindow.Activate(); return; }
-        _effectsWindow = new EffectsWindow(new EffectHost(ApplyEffectPreset, AddVideoEffect, RemoveVideoEffect, SetVideoEffectEnabled, ListVideoEffects, DescribeEffectTarget, UpdateVideoEffect, SetPreviewEffect, AddLookStyle)) { Owner = this };
-        _effectsWindow.Closed += (_, _) => { _effectsWindow = null; if (EffectsWindowMenuItem is not null) EffectsWindowMenuItem.IsChecked = false; };
-        EffectsWindowMenuItem.IsChecked = true; _effectsWindow.Show();
+        OpenToolPane("effects", "Effects", 700, 660);
+        EffectsWindowMenuItem.IsChecked = true;
     }
+
+    private EffectsPanel BuildEffectsPanel()
+        => _effectsPanel ??= new EffectsPanel(new EffectHost(ApplyEffectPreset, AddVideoEffect, RemoveVideoEffect, SetVideoEffectEnabled, ListVideoEffects, DescribeEffectTarget, UpdateVideoEffect, SetPreviewEffect, AddLookStyle));
 
     // ---- effect stack -------------------------------------------------------
     // Effects live on a placement, or on the composition when they should apply to
@@ -1626,7 +1711,7 @@ public partial class MainWindow : Window
         InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); _ = ShowCurrentProjectFrameAsync();
     }
 
-    private void ApplyEffectPreset(EffectsWindow.EffectOptions options)
+    private void ApplyEffectPreset(EffectsPanel.EffectOptions options)
     {
         var target = SelectedKeyframeTarget();
         if (target is null) { MessageBox.Show(this, "Select a clip, audio item, text overlay, or image overlay first.", "Effects", MessageBoxButton.OK, MessageBoxImage.Information); return; }
@@ -1652,7 +1737,13 @@ public partial class MainWindow : Window
     private void MoveEditCaretToKeyframe(bool forward)
     {
         var target = SelectedKeyframeTarget(); if (target is null || target.Value.Keyframes.Count == 0) return;
-        Pause(); var positions = target.Value.Keyframes.Select(item => target.Value.Start + item.Offset).Distinct().OrderBy(item => item).ToArray();
+        Pause();
+        // When a row is selected in the strip, step along that row. Only when it holds no
+        // keyframes does this fall back to every keyframe on the item.
+        var keyframes = target.Value.Keyframes.AsEnumerable();
+        if (_keyframeStrip?.SelectedProperty is { } property && target.Value.Keyframes.Any(item => item.Property == property))
+            keyframes = keyframes.Where(item => item.Property == property);
+        var positions = keyframes.Select(item => target.Value.Start + item.Offset).Distinct().OrderBy(item => item).ToArray();
         var position = forward ? positions.FirstOrDefault(item => item > _editPosition + TimeSpan.FromMilliseconds(1)) : positions.LastOrDefault(item => item < _editPosition - TimeSpan.FromMilliseconds(1));
         if (position == default && (forward ? positions[0] != TimeSpan.Zero : positions[^1] != TimeSpan.Zero)) position = forward ? positions[0] : positions[^1];
         SetEditPosition(position); RefreshLayerStack();
@@ -2008,16 +2099,15 @@ public partial class MainWindow : Window
 
     private void Workspace_Click(object sender, RoutedEventArgs e)
     {
-        var length = new TextBox { Text = FormatWholeSeconds(_composition.WorkspaceDuration), Margin = new Thickness(0, 6, 0, 12) };
+        var length = new TextBox { Text = FormatHoursMinutesSeconds(_composition.WorkspaceDuration), Margin = new Thickness(0, 6, 0, 12) };
         var black = new CheckBox { Content = "Render unused time at the end as black", IsChecked = _composition.RenderWorkspaceTailAsBlack, Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, 14) };
         var note = new TextBlock { Text = "When unchecked, extra working space is ignored during playback/export. Empty gaps between positioned clips remain black so timing is preserved.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
         var apply = new Button { Content = "Apply Working Area", IsDefault = true, HorizontalAlignment = HorizontalAlignment.Right };
-        var panel = new StackPanel { Margin = new Thickness(22) }; panel.Children.Add(new TextBlock { Text = "Working area length (MM:SS or whole seconds)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(length); panel.Children.Add(black); panel.Children.Add(note); panel.Children.Add(apply);
+        var panel = new StackPanel { Margin = new Thickness(22) }; panel.Children.Add(new TextBlock { Text = "Working area length (HH:MM:SS, MM:SS, or whole seconds)", FontWeight = FontWeights.SemiBold }); panel.Children.Add(length); panel.Children.Add(black); panel.Children.Add(note); panel.Children.Add(apply);
         var window = new Window { Title = "Project Working Area", Width = 470, Height = 280, Content = panel, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
         apply.Click += (_, _) =>
         {
-            TimeSpan value;
-            if (double.TryParse(length.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)) value = TimeSpan.FromSeconds(Math.Ceiling(seconds)); else if (TimeSpan.TryParse(length.Text, CultureInfo.InvariantCulture, out value)) value = TimeSpan.FromSeconds(Math.Ceiling(value.TotalSeconds)); else { MessageBox.Show(window, "Enter whole seconds or a time such as 02:30.", "Invalid duration"); return; }
+            if (!TryParseDuration(length.Text, out var value)) { MessageBox.Show(window, "Enter a length as 00:02:30, 02:30, or a number of seconds.", "Invalid duration"); return; }
             if (value <= TimeSpan.Zero || value > TimeSpan.FromHours(24)) { MessageBox.Show(window, "Choose a working area between 1 second and 24 hours.", "Invalid duration"); return; }
             EnsureProjectHistory(); _composition.WorkspaceDuration = value; _composition.RenderWorkspaceTailAsBlack = black.IsChecked == true; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); window.DialogResult = true;
         };
@@ -2256,6 +2346,8 @@ public partial class MainWindow : Window
         if (ctrl && e.Key == Key.S) { SaveProject_Click(sender, e); e.Handled = true; return; }
         if (e.Key == Key.Enter) { _ = ExportCurrentAsync(); e.Handled = true; return; }
         if (ctrl && e.Key == Key.N) { NewProject_Click(sender, e); e.Handled = true; return; }
+        if (ctrl && e.Key == Key.E) { ToggleEffectsWindow_Click(sender, e); e.Handled = true; return; }
+        if (ctrl && e.Key == Key.Q) { ToggleEqualizerWindow_Click(sender, e); e.Handled = true; return; }
         if (ctrl && e.Key == Key.O) { OpenProject_Click(sender, e); e.Handled = true; return; }
         if (ctrl && e.Key == Key.X) { CutSelectionToClipboard(); e.Handled = true; return; }
         if (ctrl && e.Key == Key.C) { CopySelection(); e.Handled = true; return; }
@@ -2285,7 +2377,7 @@ public partial class MainWindow : Window
     private void Delete_Click(object sender, RoutedEventArgs e) => DeleteSelection();
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
     private async void ExportAudio_Click(object sender, RoutedEventArgs e) => await ExportAudioAsync();
-    private void MarkerText_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Workspace_Click(sender, e);
+    private void WorkArea_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Workspace_Click(sender, e);
 
     private void CopySelection()
     {
@@ -2339,18 +2431,12 @@ public partial class MainWindow : Window
     private void MenuMute_Click(object sender, RoutedEventArgs e) { var desired = (sender as MenuItem)?.IsChecked == true; if (desired != _muted) ToggleMute(); }
 
     private void ToggleMediaPanel_Click(object sender, RoutedEventArgs e)
-    {
-        if (FindVisualAncestor<Border>(ProjectMediaList, border => border.Parent is Grid grid && Grid.GetColumn(border) == 0) is not { Parent: Grid host } panel) return;
-        var show = (sender as MenuItem)?.IsChecked == true; panel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (host.ColumnDefinitions.Count >= 2) { if (!show && host.ColumnDefinitions[0].ActualWidth > 0) _mediaPanelWidth = host.ColumnDefinitions[0].ActualWidth; host.ColumnDefinitions[0].Width = show ? new GridLength(Math.Max(175, _mediaPanelWidth)) : new GridLength(0); host.ColumnDefinitions[1].Width = show ? new GridLength(5) : new GridLength(0); }
-    }
+        => ShowPane("media", (sender as MenuItem)?.IsChecked == true);
 
     private void ToggleLayersPanel_Click(object sender, RoutedEventArgs e)
-    {
-        var panel = FindVisualAncestor<Grid>(CompositionScroll, grid => grid.Parent is Grid && Grid.GetRow(grid) == 3); if (panel?.Parent is not Grid host || host.RowDefinitions.Count < 4) return;
-        var show = (sender as MenuItem)?.IsChecked == true; if (!show && host.RowDefinitions[3].ActualHeight > 0) _layersPanelHeight = new GridLength(host.RowDefinitions[3].ActualHeight);
-        panel.Visibility = show ? Visibility.Visible : Visibility.Collapsed; host.RowDefinitions[3].Height = show ? _layersPanelHeight : new GridLength(0); host.RowDefinitions[2].Height = show ? new GridLength(5) : new GridLength(0);
-    }
+        => ShowPane("layers", (sender as MenuItem)?.IsChecked == true);
+
+    private void ResetLayout_Click(object sender, RoutedEventArgs e) => ResetDockLayout();
 
     private static T? FindVisualAncestor<T>(DependencyObject start, Func<T, bool> predicate) where T : DependencyObject
     {
@@ -2448,6 +2534,40 @@ public partial class MainWindow : Window
     {
         var extension = System.IO.Path.GetExtension(path);
         return extension.Equals(".post", StringComparison.OrdinalIgnoreCase) || extension.Equals(".clipedit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Always shows the hours, so the field reads 00:00:00 rather than 00:00 and it is
+    /// plain which part is seconds.
+    /// </summary>
+    private static string FormatHoursMinutesSeconds(TimeSpan value)
+    {
+        value = TimeSpan.FromSeconds(Math.Ceiling(Math.Max(0, value.TotalSeconds)));
+        return $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00}";
+    }
+
+    /// <summary>
+    /// Reads a length the way an editor means it: a bare number is seconds, two parts are
+    /// minutes and seconds, three are hours, minutes and seconds. TimeSpan.Parse is no use
+    /// here because it reads "02:30" as two and a half hours, which is not what anyone
+    /// typing a clip length intends, and the field said MM:SS while doing it.
+    /// </summary>
+    private static bool TryParseDuration(string text, out TimeSpan value)
+    {
+        value = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var parts = text.Trim().Split(':');
+        if (parts.Length > 3) return false;
+
+        var total = 0d;
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var part) || part < 0) return false;
+            // The last part is always seconds, the one before it minutes, then hours.
+            total += part * Math.Pow(60, parts.Length - 1 - i);
+        }
+        value = TimeSpan.FromSeconds(Math.Ceiling(total));
+        return true;
     }
 
     private static string FormatWholeSeconds(TimeSpan value)

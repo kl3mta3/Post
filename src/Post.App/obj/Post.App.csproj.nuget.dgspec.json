@@ -57,6 +57,14 @@
           "framework": "net8.0-windows7.0",
           "targetAlias": "net8.0-windows",
           "dependencies": {
+            "Dirkster.AvalonDock": {
+              "target": "Package",
+              "version": "[4.74.1, )"
+            },
+            "Dirkster.AvalonDock.Themes.VS2013": {
+              "target": "Package",
+              "version": "[4.74.1, )"
+            },
             "NAudio": {
               "target": "Package",
               "version": "[2.2.1, )"

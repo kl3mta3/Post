@@ -1,9 +1,10 @@
-using Microsoft.Win32;
+﻿using Microsoft.Win32;
 using Post.Core;
 using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 
 namespace Post.App;
@@ -97,15 +98,56 @@ internal sealed class EffectParameterPanel : StackPanel
 
     private void AddSlider(string label, double minimum, double maximum, double value, string hint)
     {
-        var slider = new Slider { Minimum = minimum, Maximum = maximum, Value = Math.Clamp(value, minimum, maximum), IsSnapToTickEnabled = false, Margin = new Thickness(0, 4, 0, 0) };
-        var readout = new TextBlock { Text = Number(slider.Value), Foreground = Brushes.LightGray, FontSize = 11, Margin = new Thickness(2, 0, 0, 2) };
-        slider.ValueChanged += (_, args) => { readout.Text = Number(args.NewValue); Changed?.Invoke(this, EventArgs.Empty); };
+        var slider = new Slider { Minimum = minimum, Maximum = maximum, Value = Math.Clamp(value, minimum, maximum), IsSnapToTickEnabled = false, VerticalAlignment = VerticalAlignment.Center };
+        // A slider alone cannot be set precisely. The number is typable, and the arrows
+        // step it by a hundredth of the range for the last bit of adjustment.
+        var box = new TextBox { Text = Number(slider.Value), Width = 64, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), ToolTip = $"Type a value between {Number(minimum)} and {Number(maximum)}" };
+        var step = Math.Max((maximum - minimum) / 100, .001);
+        var syncing = false;
+
+        slider.ValueChanged += (_, args) =>
+        {
+            if (!syncing) { syncing = true; box.Text = Number(args.NewValue); syncing = false; }
+            Changed?.Invoke(this, EventArgs.Empty);
+        };
+        box.TextChanged += (_, _) =>
+        {
+            if (syncing || !double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var typed)) return;
+            syncing = true; slider.Value = Math.Clamp(typed, minimum, maximum); syncing = false;
+            Changed?.Invoke(this, EventArgs.Empty);
+        };
+        // Typing something unusable leaves the slider where it was; correct it on the way out.
+        box.LostFocus += (_, _) => { syncing = true; box.Text = Number(slider.Value); syncing = false; };
+
+        var steppers = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 0, 0) };
+        steppers.Children.Add(Stepper("▲", () => slider.Value = Math.Clamp(slider.Value + step, minimum, maximum)));
+        steppers.Children.Add(Stepper("▼", () => slider.Value = Math.Clamp(slider.Value - step, minimum, maximum)));
+
+        var row = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(box, 1); Grid.SetColumn(steppers, 2);
+        row.Children.Add(slider); row.Children.Add(box); row.Children.Add(steppers);
+
         _sliders[label] = slider;
         var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
         panel.Children.Add(new TextBlock { Text = label, FontWeight = FontWeights.SemiBold, Margin = new Thickness(2, 0, 0, 1) });
-        panel.Children.Add(slider); panel.Children.Add(readout);
-        panel.Children.Add(new TextBlock { Text = hint, Foreground = Theme.Hint, FontSize = 11, Margin = new Thickness(2, 0, 0, 0) });
+        panel.Children.Add(row);
+        panel.Children.Add(new TextBlock { Text = hint, Foreground = Theme.Hint, FontSize = 11, Margin = new Thickness(2, 2, 0, 0) });
         Children.Add(panel);
+    }
+
+    /// <summary>One of the small arrows beside a value, repeating while it is held.</summary>
+    private static RepeatButton Stepper(string glyph, Action nudge)
+    {
+        var button = new RepeatButton
+        {
+            Content = glyph, FontSize = 7, Width = 18, Height = 13, Padding = new Thickness(0),
+            Delay = 400, Interval = 60, VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        button.Click += (_, _) => nudge();
+        return button;
     }
 
     private static StackPanel Field(string label, Control control)

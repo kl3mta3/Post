@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "fSwKeBD9sKs=",
+  "dgSpecHash": "9JgcuA5QhZQ=",
   "success": true,
   "projectFilePath": "C:\\Users\\Kenny\\source\\Claude\\Post\\src\\Post.App\\Post.App.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\Kenny\\.nuget\\packages\\dirkster.avalondock\\4.74.1\\dirkster.avalondock.4.74.1.nupkg.sha512",
+    "C:\\Users\\Kenny\\.nuget\\packages\\dirkster.avalondock.themes.vs2013\\4.74.1\\dirkster.avalondock.themes.vs2013.4.74.1.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\microsoft.netcore.platforms\\3.1.0\\microsoft.netcore.platforms.3.1.0.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\microsoft.win32.registry\\4.7.0\\microsoft.win32.registry.4.7.0.nupkg.sha512",
     "C:\\Users\\Kenny\\.nuget\\packages\\naudio\\2.2.1\\naudio.2.2.1.nupkg.sha512",

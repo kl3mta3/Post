@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Collections.Concurrent;
 
 namespace Post.Core;
@@ -15,6 +15,13 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
     public Task<IReadOnlyList<VideoEncoder>> AvailableEncodersAsync(CancellationToken token = default) => _encoders.AvailableAsync(token);
 
     private Task<VideoEncoder> EncoderAsync(CancellationToken token) => _encoders.ResolveAsync(EncoderPreference, token);
+    /// <summary>
+    /// A cap on the canvas rotation pads out to. An anchor in a corner of a 1080p frame
+    /// would otherwise ask for a 4400 pixel square, which costs far more than the turn
+    /// is worth; past this the far corners clip instead.
+    /// </summary>
+    private const int MaximumRotationSide = 2600;
+
     private static string S(double value) => value.ToString("0.######", CultureInfo.InvariantCulture);
     private static string Ts(TimeSpan value) => S(value.TotalSeconds);
 
@@ -307,7 +314,8 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
                 // transform: scaled about the centre, then offset by (position - 0.5).
                 // geq evaluates an expression per pixel per frame and dominates render time,
                 // so it is only worth adding when the opacity is genuinely animated.
-                var moves = placement.Keyframes.Any(item => item.Property is KeyframeProperty.PositionX or KeyframeProperty.PositionY or KeyframeProperty.Scale);
+                var turns = Rotation.Turns(placement.Keyframes, placement.SpinDegreesPerSecond);
+                var moves = turns || placement.Keyframes.Any(item => item.Property is KeyframeProperty.PositionX or KeyframeProperty.PositionY or KeyframeProperty.Scale);
                 var fades = placement.Keyframes.Any(item => item.Property is KeyframeProperty.Opacity);
                 var clipEffects = VideoEffects.Build(placement.Effects);
                 if (moves || fades)
@@ -321,6 +329,16 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
                         var y = KeyframeEvaluator.BuildFfmpegExpression(placement.Keyframes, KeyframeProperty.PositionY, .5, "t", offsetSeconds);
                         chain.Add($"scale=w='max(2,trunc({width}*({scale})/2)*2)':h='max(2,trunc({height}*({scale})/2)*2)':eval=frame");
                         placementPositions[input] = ($"(W-w)/2+(({x})-0.5)*W", $"(H-h)/2+(({y})-0.5)*H");
+                    }
+                    if (turns)
+                    {
+                        // Rotating about the layer's anchor rather than the frame centre.
+                        var angle = Rotation.AngleExpression(placement.Keyframes, placement.SpinDegreesPerSecond, offsetSeconds);
+                        var plan = Rotation.Build(width, height, visual.Item.Layer.AnchorX, visual.Item.Layer.AnchorY, angle, MaximumRotationSide);
+                        chain.AddRange(plan.Filters);
+                        var (positionX, positionY) = placementPositions.TryGetValue(input, out var placed)
+                            ? placed : ("(W-w)/2", "(H-h)/2");
+                        placementPositions[input] = ($"({positionX})-{plan.OffsetX}", $"({positionY})-{plan.OffsetY}");
                     }
                     if (fades)
                     {
@@ -369,11 +387,22 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
                 if (opacityRamps is not null) chain.AddRange(opacityRamps);
                 else if (graphic.Keyframes.Any(item => item.Property == KeyframeProperty.Opacity))
                     chain.Add($"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({KeyframeEvaluator.BuildFfmpegExpression(graphic.Keyframes, KeyframeProperty.Opacity, constantOpacity, "T", start)})':enable='between(t,{Ts(graphic.Start)},{Ts(graphic.End)})'");
+                // Rotation goes on last, about the layer's anchor, and shifts the overlay
+                // back by the padding it added so the anchor stays put.
+                var turnOffsetX = 0; var turnOffsetY = 0;
+                if (Rotation.Turns(graphic.Keyframes, graphic.SpinDegreesPerSecond))
+                {
+                    var angle = Rotation.AngleExpression(graphic.Keyframes, graphic.SpinDegreesPerSecond, start);
+                    var layer = composition.Layers.FirstOrDefault(item => item.Graphics.Contains(graphic));
+                    var plan = Rotation.Build(graphicWidth, graphicHeight, layer?.AnchorX ?? .5, layer?.AnchorY ?? .5, angle, MaximumRotationSide);
+                    chain.AddRange(plan.Filters);
+                    turnOffsetX = plan.OffsetX; turnOffsetY = plan.OffsetY;
+                }
                 filters.Add($"[{input}:v]{string.Join(',', chain)}[g{i}]");
                 var positionX = KeyframeEvaluator.BuildFfmpegExpression(graphic.Keyframes, KeyframeProperty.PositionX, graphic.X, "t", start);
                 var positionY = KeyframeEvaluator.BuildFfmpegExpression(graphic.Keyframes, KeyframeProperty.PositionY, graphic.Y, "t", start);
                 var next = $"graphic{i}";
-                filters.Add($"[{video}][g{i}]overlay=x='W*({positionX})':y='H*({positionY})':eval=frame:enable='between(t,{Ts(graphic.Start)},{Ts(graphic.End)})':eof_action=pass:shortest=0[{next}]"); video = next;
+                filters.Add($"[{video}][g{i}]overlay=x='W*({positionX})-{turnOffsetX}':y='H*({positionY})-{turnOffsetY}':eval=frame:enable='between(t,{Ts(graphic.Start)},{Ts(graphic.End)})':eof_action=pass:shortest=0[{next}]"); video = next;
             }
             var videoSpeed = Math.Max(.01, options.Speed);
             // Output effects run on the finished frame, after every layer is composited.

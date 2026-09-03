@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 
 namespace Post.Core;
 
@@ -23,7 +23,7 @@ public enum TimelineLayerKind { Video = 0, Graphics = 1, Audio = 2 }
 public enum GraphicsOverlayKind { Text = 0, Image = 1, SolidColor = 2, Gradient = 3, Lottie = 4 }
 public enum GraphicGradientKind { Linear, Radial }
 public enum KeyframeInterpolation { Linear, Discrete, Smooth }
-public enum KeyframeProperty { PositionX, PositionY, Scale, Opacity, Volume }
+public enum KeyframeProperty { PositionX, PositionY, Scale, Opacity, Volume, Rotation }
 // Keep the numeric values stable because Post project JSON stores enums as numbers.
 public enum VideoEffectKind { Vignette = 0, Blur = 1, Sharpen = 2, ColorCorrection = 3, Lut = 4 }
 
@@ -120,6 +120,8 @@ public sealed class TimelinePlacement
     public TimeSpan? Length { get; set; }
     public ObservableCollection<AnimationKeyframe> Keyframes { get; } = [];
     public ObservableCollection<VideoEffect> Effects { get; } = [];
+    /// <summary>Constant spin in degrees per second; negative turns anticlockwise.</summary>
+    public double SpinDegreesPerSecond { get; set; }
     public TimeSpan AvailableDuration => Clip.SelectedDuration > InPoint ? Clip.SelectedDuration - InPoint : TimeSpan.Zero;
     public TimeSpan Duration => Length is { } length && length < AvailableDuration ? length : AvailableDuration;
     public TimeSpan End => Start + Duration;
@@ -135,6 +137,12 @@ public sealed class TimelineLayer
     public bool MuteRightChannel { get; set; }
     /// <summary>How loud this layer sits in the mix, 0 to 2, multiplying its clips' own volume.</summary>
     public double Volume { get; set; } = 1;
+    /// <summary>
+    /// The point everything on this layer turns and scales about, as a fraction of the
+    /// item's own box. The middle is 0.5, 0.5; a corner is 0 or 1.
+    /// </summary>
+    public double AnchorX { get; set; } = .5;
+    public double AnchorY { get; set; } = .5;
     public TimelineLayerKind Kind { get; set; }
     public ObservableCollection<TimelinePlacement> Placements { get; } = [];
     public ObservableCollection<GraphicsOverlay> Graphics { get; } = [];
@@ -165,6 +173,8 @@ public sealed class GraphicsOverlay
     public TimeSpan Start { get; set; }
     public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(5);
     public ObservableCollection<AnimationKeyframe> Keyframes { get; } = [];
+    /// <summary>Constant spin in degrees per second; negative turns anticlockwise.</summary>
+    public double SpinDegreesPerSecond { get; set; }
     public TimeSpan End => Start + Duration;
 }
 
