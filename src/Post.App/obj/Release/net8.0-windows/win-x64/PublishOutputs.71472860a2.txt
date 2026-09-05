@@ -1,7 +1,0 @@
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.exe
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.deps.json
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.runtimeconfig.json
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.Core.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\Post-latest\Post.Core.pdb

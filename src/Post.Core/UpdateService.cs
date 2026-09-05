@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -10,9 +10,24 @@ public sealed class UpdateService(HttpClient? client = null)
 {
     public const string OfficialRepository = "kl3mta3/Post";
     public const string UpdateEndpoint = "https://download.post.lastweeksproject.com";
+
+    /// <summary>
+    /// The releases list, which names every asset. The download endpoint above redirects
+    /// straight to the installer, so it cannot serve a portable copy: there is nothing
+    /// there to choose between.
+    /// </summary>
+    public const string ReleasesEndpoint = "https://api.github.com/repos/" + OfficialRepository + "/releases/latest";
     private readonly HttpClient _client = client ?? new HttpClient();
-    public async Task<UpdateInfo?> CheckAsync(string endpoint, CancellationToken token = default)
+    public Task<UpdateInfo?> CheckAsync(string endpoint, CancellationToken token = default)
+        => CheckAsync(endpoint, InstallKind.Current, token);
+
+    /// <summary>
+    /// Looks for a newer Post, and picks the download that suits how this copy was put
+    /// here: the installer for an installed one, the zip for a portable one.
+    /// </summary>
+    public async Task<UpdateInfo?> CheckAsync(string endpoint, PostInstallKind kind, CancellationToken token = default)
     {
+        var wanted = InstallKind.ExtensionFor(kind);
         _client.DefaultRequestHeaders.UserAgent.Clear(); _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Post", "1.0"));
         using var request = CreateHttp2Request(endpoint);
         using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token); response.EnsureSuccessStatusCode();
@@ -25,13 +40,15 @@ public sealed class UpdateService(HttpClient? client = null)
             if (string.IsNullOrWhiteSpace(fileName)) fileName = Path.GetFileName(response.RequestMessage?.RequestUri?.LocalPath);
             var installerVersion = VersionFromFileName(fileName);
             if (installerVersion is null || installerVersion <= CurrentVersion()) return null;
+            // A single file endpoint cannot offer a choice, so it only serves the kind it holds.
+            if (!(fileName ?? "").EndsWith(wanted, StringComparison.OrdinalIgnoreCase)) return null;
             return new(installerVersion, $"Post {installerVersion}", endpoint, fileName!, $"https://github.com/{OfficialRepository}/releases/latest");
         }
         using var json = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(token)); var root = json.RootElement;
         var tag = (root.GetProperty("tag_name").GetString() ?? "0").TrimStart('v'); if (!Version.TryParse(tag, out var version)) return null;
         if (version <= CurrentVersion()) return null;
         var assets = root.GetProperty("assets").EnumerateArray();
-        var asset = assets.FirstOrDefault(a => (a.GetProperty("name").GetString() ?? "").EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        var asset = assets.FirstOrDefault(a => (a.GetProperty("name").GetString() ?? "").EndsWith(wanted, StringComparison.OrdinalIgnoreCase));
         if (asset.ValueKind == JsonValueKind.Undefined) return null;
         return new(version, root.GetProperty("name").GetString() ?? $"Post {version}", asset.GetProperty("browser_download_url").GetString()!, asset.GetProperty("name").GetString()!, root.GetProperty("html_url").GetString()!);
     }
@@ -53,5 +70,11 @@ public sealed class UpdateService(HttpClient? client = null)
             if (Version.TryParse(part.TrimStart('v', 'V'), out var version)) return version;
         return null;
     }
-    public static void LaunchInstaller(string path) => Process.Start(new ProcessStartInfo(path, "/S") { UseShellExecute = true });
+    /// <summary>
+    /// Runs the installer over an installed copy. The switches are Inno Setup's own:
+    /// /S is NSIS's, which Inno ignores, so what used to happen was the whole wizard
+    /// appearing instead of the silent update it was meant to be.
+    /// </summary>
+    public static void LaunchInstaller(string path) => Process.Start(new ProcessStartInfo(path,
+        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS") { UseShellExecute = true });
 }

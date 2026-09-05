@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace Post.Core;
 public sealed record AppSettings
@@ -13,6 +13,16 @@ public sealed record AppSettings
     public int AudioBitrateKbps { get; init; } = 192;
     /// <summary>Which H.264 encoder exports use: "auto", "cpu", or an encoder name.</summary>
     public string VideoEncoder { get; init; } = "auto";
+    /// <summary>
+    /// Copy imported media into the project's own folder. Off by default: a project
+    /// references its media, so this trades disk and import time for a self-contained
+    /// folder, and edits to the original stop reaching the project.
+    /// </summary>
+    public bool CopyMediaOnImport { get; init; }
+    /// <summary>Where those copies go, chosen when the setting is switched on.</summary>
+    public string MediaCopyFolder { get; init; } = "";
+    /// <summary>Whether to offer that choice on the first import of a project.</summary>
+    public bool AskAboutCopyOnImport { get; init; } = true;
     public string[] RecentProjectPaths { get; init; } = [];
     /// <summary>Lottie animations imported in the Animations window.</summary>
     public string[] AnimationPaths { get; init; } = [];

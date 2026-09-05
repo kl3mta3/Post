@@ -1,3 +1,4 @@
+using AvalonDock.Controls;
 using AvalonDock.Layout;
 using AvalonDock.Layout.Serialization;
 using System.IO;
@@ -57,17 +58,37 @@ public partial class MainWindow
 
     private void ApplyPaneSizesNow()
     {
+        // The row holding media and preview takes the same share as the layers below it.
+        foreach (var panel in Docking.Layout.Descendents().OfType<LayoutPanel>())
+            if (panel.Orientation == System.Windows.Controls.Orientation.Horizontal)
+                panel.DockHeight = new GridLength(1, GridUnitType.Star);
+
         foreach (var pane in Docking.Layout.Descendents().OfType<LayoutAnchorablePane>())
         {
             switch (pane.Children.FirstOrDefault()?.ContentId)
             {
-                case "media": pane.DockWidth = new GridLength(280); pane.DockMinWidth = 175; break;
-                case "preview": pane.DockWidth = new GridLength(1, GridUnitType.Star); pane.DockMinWidth = 420; break;
-                case "layers": pane.DockHeight = new GridLength(430); pane.DockMinHeight = 210; break;
+                case "media": pane.DockWidth = new GridLength(1, GridUnitType.Star); pane.DockMinWidth = 170; break;
+                case "preview": pane.DockWidth = new GridLength(4, GridUnitType.Star); pane.DockMinWidth = 360; break;
+                case "layers": pane.DockHeight = new GridLength(1, GridUnitType.Star); pane.DockMinHeight = 190; break;
                 case "effects" or "equalizer": pane.DockWidth = new GridLength(360); pane.DockMinWidth = 330; break;
             }
         }
     }
+
+    /// <summary>
+    /// Wraps a pane's contents so they scroll. Docked into a narrow column, the effects
+    /// browser is taller and wider than the space it gets, and without this the bottom of
+    /// it simply could not be reached.
+    /// </summary>
+    private static ScrollViewer ScrollHost(FrameworkElement content) => new()
+    {
+        Content = content,
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        // Horizontal scrolling would hand the contents unbounded width to measure in, so
+        // every wrapping paragraph would ask for its full unwrapped length and the pane
+        // would open far wider than it needs. Width is the viewport's; text wraps into it.
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+    };
 
     /// <summary>Builds the contents of a tool pane the first time it is asked for.</summary>
     private FrameworkElement BuildToolPane(string contentId) => contentId switch
@@ -107,19 +128,26 @@ public partial class MainWindow
         anchorable.Hiding += ToolPaneHiding;
     }
 
-    /// <summary>
-    /// Wraps a panel so it can be scrolled. Docked into a narrow column, a tool pane is
-    /// otherwise cropped with no way to reach the rest of it.
-    /// </summary>
-    private static ScrollViewer ScrollHost(FrameworkElement content) => new()
-    {
-        Content = content,
-        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-    };
-
     /// <summary>Puts a tool pane away, closing its floating window if it is in one.</summary>
-    private void ClosePane(string contentId) => Pane(contentId)?.Hide();
+    private void ClosePane(string contentId)
+    {
+        Pane(contentId)?.Hide();
+        CloseEmptyFloatingWindows();
+    }
+
+    /// <summary>
+    /// Hiding a pane hides the pane, not the window it floats in, which left the shortcut
+    /// looking like it had done nothing while the window sat there. Anything left holding
+    /// no visible pane is closed.
+    /// </summary>
+    private void CloseEmptyFloatingWindows()
+    {
+        foreach (var floater in Docking.FloatingWindows.ToArray())
+        {
+            var occupied = floater.Model?.Descendents().OfType<LayoutAnchorable>().Any(item => !item.IsHidden) ?? false;
+            if (!occupied) floater.Close();
+        }
+    }
 
     private void ToolPaneHiding(object? sender, System.ComponentModel.CancelEventArgs e)
     {

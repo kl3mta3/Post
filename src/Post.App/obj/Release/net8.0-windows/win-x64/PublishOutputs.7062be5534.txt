@@ -1,8 +1,0 @@
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\ClipEdit.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\D3DCompiler_47_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\PenImc_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\PresentationNative_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\vcruntime140_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\wpfgfx_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\ClipEdit.Core.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit-Updated\ClipEdit.exe

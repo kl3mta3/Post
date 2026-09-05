@@ -103,6 +103,31 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
     private static string Signature(string value)
         => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))[..8].ToLowerInvariant();
 
+    /// <summary>
+    /// Decodes part of a file to a plain WAV at the rate and channel count asked for.
+    ///
+    /// Anything that listens to audio rather than plays it — speech recognition above all —
+    /// wants raw samples at a fixed rate, and has no way to decode an arbitrary container
+    /// itself. Seeking before the input is deliberate: it costs a keyframe's accuracy and
+    /// saves decoding everything up to the point wanted.
+    /// </summary>
+    public async Task<string> ExtractAudioAsync(
+        string input, TimeSpan start, TimeSpan duration, int sampleRate, int channels, string output,
+        CancellationToken token = default)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        var args = new List<string> { "-y" };
+        if (start > TimeSpan.Zero) args.AddRange(["-ss", start.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)]);
+        args.AddRange(["-i", input]);
+        if (duration > TimeSpan.Zero) args.AddRange(["-t", duration.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)]);
+        args.AddRange(["-vn", "-map", "0:a:0", "-ac", channels.ToString(CultureInfo.InvariantCulture),
+                       "-ar", sampleRate.ToString(CultureInfo.InvariantCulture), "-c:a", "pcm_s16le", "-f", "wav", output]);
+
+        var result = await runner.RunAsync(tools.Ffmpeg, args, token);
+        result.EnsureSuccess("Audio extraction");
+        return output;
+    }
+
     public async Task<string?> CreateWaveformAsync(MediaInfo media, string cacheDirectory, int width = 1800, int height = 120, CancellationToken token = default)
     {
         if (!media.HasAudio) return null;
@@ -464,6 +489,11 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
     private static string AudioChannelFilter(TimelineLayer layer)
     {
         if (layer.Kind != TimelineLayerKind.Audio) return "";
+        // A layer playing one channel plays it in both ears, which is what splitting a
+        // stereo recording into separate tracks is for.
+        if (layer.ChannelSource == AudioChannelSource.Left) return ",aformat=channel_layouts=stereo,pan=stereo|FL=c0|FR=c0";
+        if (layer.ChannelSource == AudioChannelSource.Right) return ",aformat=channel_layouts=stereo,pan=stereo|FL=c1|FR=c1";
+        // The mute buttons silence a side without moving it, which is a different thing.
         if (layer.MuteLeftChannel && !layer.MuteRightChannel) return ",aformat=channel_layouts=stereo,pan=stereo|FL=0*FL|FR=FR";
         if (layer.MuteRightChannel && !layer.MuteLeftChannel) return ",aformat=channel_layouts=stereo,pan=stereo|FL=FL|FR=0*FR";
         return "";

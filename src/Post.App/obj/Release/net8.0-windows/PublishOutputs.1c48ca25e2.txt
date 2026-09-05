@@ -1,7 +1,0 @@
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.exe
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.deps.json
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.runtimeconfig.json
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.Core.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\dist\ClipEdit\ClipEdit.Core.pdb

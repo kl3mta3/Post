@@ -1,8 +1,0 @@
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\ClipEdit.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\D3DCompiler_47_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\PenImc_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\PresentationNative_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\vcruntime140_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\wpfgfx_cor3.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\ClipEdit.Core.pdb
-C:\Users\Kenny\source\GPT\FreeClipEdit\artifacts\ui-layer-final\ClipEdit.exe

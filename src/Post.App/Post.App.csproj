@@ -14,11 +14,12 @@
     <Product>Post</Product>
     <Description>A desktop video, audio, and graphics editor.</Description>
     <Company>Post contributors</Company>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Post.Core\Post.Core.csproj" />
+    <ProjectReference Include="..\Post.Plugins\Post.Plugins.csproj" />
   </ItemGroup>
 
   <ItemGroup>

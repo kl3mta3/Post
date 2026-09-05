@@ -85,15 +85,77 @@ internal sealed class EffectParameterPanel : StackPanel
     private void BuildLutPicker()
     {
         var path = new TextBox { Text = _lutPath ?? "", IsReadOnly = true, TextWrapping = TextWrapping.Wrap };
-        var browse = new Button { Content = "Choose .cube file…", Padding = new Thickness(10, 4, 10, 4), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 10) };
+        var library = new ListBox
+        {
+            MaxHeight = 132, Background = new SolidColorBrush(Color.FromRgb(5, 13, 27)), Foreground = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(48, 72, 99)), Margin = new Thickness(0, 4, 0, 4),
+        };
+        ScrollViewer.SetVerticalScrollBarVisibility(library, ScrollBarVisibility.Auto);
+
+        void Fill(string? select)
+        {
+            library.Items.Clear();
+            // The ready-made looks are listed whether or not their LUT has been generated
+            // yet; picking one writes it. Everything else is a LUT that was added.
+            foreach (var style in LookStyles.All)
+                library.Items.Add(new ListBoxItem
+                {
+                    Content = style.Name, Tag = LookStyles.CubePath(style, LutLibrary.Folder),
+                    Foreground = Brushes.White, Padding = new Thickness(6, 3, 6, 3), ToolTip = style.Description,
+                });
+            foreach (var item in LutLibrary.All().Where(path => !LutLibrary.IsBuiltIn(path)))
+                library.Items.Add(new ListBoxItem { Content = LutLibrary.DisplayName(item), Tag = item, Foreground = Brushes.White, Padding = new Thickness(6, 3, 6, 3), ToolTip = item });
+            library.SelectedItem = library.Items.Cast<ListBoxItem>().FirstOrDefault(item => (string)item.Tag! == select);
+        }
+
+        void Choose(string chosen)
+        {
+            // A built-in look is only written out when it is actually asked for.
+            if (!File.Exists(chosen) && LookStyles.StyleForFile(chosen) is { } style)
+            {
+                try { chosen = LookStyles.EnsureCube(style, LutLibrary.Folder); }
+                catch (Exception exception) { MessageBox.Show(_owner, exception.Message, "Effects", MessageBoxButton.OK, MessageBoxImage.Error); return; }
+            }
+            _lutPath = chosen; path.Text = chosen;
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+
+        library.SelectionChanged += (_, _) =>
+        {
+            if (library.SelectedItem is ListBoxItem { Tag: string chosen } && chosen != _lutPath) Choose(chosen);
+        };
+
+        var browse = new Button { Content = "Add .cube file…", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(0, 0, 6, 0) };
         browse.Click += (_, _) =>
         {
-            var dialog = new OpenFileDialog { Filter = "Colour lookup table|*.cube|All files|*.*", Title = "Choose a LUT" };
+            var dialog = new OpenFileDialog { Filter = "Colour lookup table|*.cube|All files|*.*", Title = "Add a LUT" };
             if (dialog.ShowDialog(_owner) != true) return;
-            _lutPath = dialog.FileName; path.Text = dialog.FileName; Changed?.Invoke(this, EventArgs.Empty);
+            // Kept alongside the saved grades, so it is still there next time.
+            var kept = LutLibrary.Keep(dialog.FileName);
+            Choose(kept); Fill(kept);
         };
-        Children.Add(Field("LUT file", path)); Children.Add(browse);
-        Children.Add(new TextBlock { Text = "Any standard .cube LUT works. The Color Grading window can create one for you.", Foreground = Brushes.LightGray, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 10) });
+
+        var remove = new Button { Content = "Remove", Padding = new Thickness(10, 4, 10, 4) };
+        remove.Click += (_, _) =>
+        {
+            if (library.SelectedItem is not ListBoxItem { Tag: string chosen }) return;
+            if (LookStyles.StyleForFile(chosen) is not null)
+            { MessageBox.Show(_owner, "The ready-made looks are always available and cannot be removed.", "Effects", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            if (MessageBox.Show(_owner, $"Delete {LutLibrary.DisplayName(chosen)} from your LUTs?", "Effects", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (!LutLibrary.Forget(chosen)) return;
+            if (_lutPath == chosen) { _lutPath = null; path.Text = ""; Changed?.Invoke(this, EventArgs.Empty); }
+            Fill(_lutPath);
+        };
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+        buttons.Children.Add(browse); buttons.Children.Add(remove);
+
+        Children.Add(Field("LUT file", path));
+        Children.Add(new TextBlock { Text = "Looks and LUTs", FontWeight = FontWeights.SemiBold, Margin = new Thickness(2, 8, 0, 0) });
+        Children.Add(library);
+        Children.Add(buttons);
+        Children.Add(new TextBlock { Text = "Any standard .cube LUT works, and one you add is copied here so it stays. The Color Grading window saves its grades to the same place.", Foreground = Brushes.LightGray, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 10) });
+        Fill(_lutPath);
     }
 
     private void AddSlider(string label, double minimum, double maximum, double value, string hint)

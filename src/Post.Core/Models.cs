@@ -20,6 +20,9 @@ public enum AspectPreset { Original, Landscape16x9, Vertical9x16, Square1x1, Por
 // Keep the original numeric values stable because Post project JSON stores enums as numbers.
 public enum TimelineLayerKind { Video = 0, Graphics = 1, Audio = 2 }
 // Keep the numeric values stable because Post project JSON stores enums as numbers.
+/// <summary>Which channel of a stereo source a layer plays, centred rather than panned.</summary>
+public enum AudioChannelSource { Both = 0, Left = 1, Right = 2 }
+// Keep the numeric values stable because Post project JSON stores enums as numbers.
 public enum GraphicsOverlayKind { Text = 0, Image = 1, SolidColor = 2, Gradient = 3, Lottie = 4 }
 public enum GraphicGradientKind { Linear, Radial }
 public enum KeyframeInterpolation { Linear, Discrete, Smooth }
@@ -95,8 +98,12 @@ public sealed class MediaSegment
 
 public sealed class ClipItem
 {
-    public required string SourcePath { get; init; }
-    public required MediaInfo Media { get; init; }
+    // Settable so a clip can be pointed at the file's new home without being replaced:
+    // every placement, effect and keyframe refers to this object, and survives the relink.
+    public required string SourcePath { get; set; }
+    public required MediaInfo Media { get; set; }
+    /// <summary>True when the source could not be found, so the clip stands in for it.</summary>
+    public bool IsOffline { get; set; }
     public string DisplayName => Path.GetFileName(SourcePath);
     public TimeSpan? PendingCutStart { get; set; }
     public TimeSpan? PendingCutEnd { get; set; }
@@ -137,6 +144,12 @@ public sealed class TimelineLayer
     public bool MuteRightChannel { get; set; }
     /// <summary>How loud this layer sits in the mix, 0 to 2, multiplying its clips' own volume.</summary>
     public double Volume { get; set; } = 1;
+    /// <summary>
+    /// One channel of the source, played centred. Splitting a stereo layer gives two
+    /// layers set this way, so each side is usable on its own rather than stuck in one
+    /// ear. This is not the same as the L and R mute buttons, which pan.
+    /// </summary>
+    public AudioChannelSource ChannelSource { get; set; } = AudioChannelSource.Both;
     /// <summary>
     /// The point everything on this layer turns and scales about, as a fraction of the
     /// item's own box. The middle is 0.5, 0.5; a corner is 0 or 1.

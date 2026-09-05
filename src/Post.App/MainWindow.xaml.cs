@@ -25,6 +25,8 @@ public partial class MainWindow : Window
         public string Name { get; set; } = "Untitled Project";
         public string? FilePath { get; set; }
         public List<ClipItem> Clips { get; } = [];
+        /// <summary>Lottie animations in the media panel, which are not ffmpeg clips.</summary>
+        public List<string> Animations { get; } = [];
         public Dictionary<ClipItem, UndoHistory<ClipSnapshot>> Histories { get; } = [];
         public UndoHistory<ProjectEditSnapshot> ProjectHistory { get; } = new(50);
         public TimelineComposition Composition { get; } = new();
@@ -35,7 +37,8 @@ public partial class MainWindow : Window
 
     private sealed record ProjectEditSnapshot(ClipState[] Clips, LayerState[] Layers, TimeSpan WorkspaceDuration,
         bool RenderWorkspaceTailAsBlack, Guid? ActiveLayerId, Guid? SelectedPlacementId, Guid? SelectedGraphicId,
-        Guid? AutomaticPlacementId, TimeSpan SequencePosition, TimeSpan EditPosition, VideoEffect[] OutputEffects, AudioEqualizer Equalizer);
+        Guid? AutomaticPlacementId, TimeSpan SequencePosition, TimeSpan EditPosition, VideoEffect[] OutputEffects, AudioEqualizer Equalizer,
+        string[]? Animations = null);
     private sealed record ClipState(ClipItem Clip, ClipSnapshot Snapshot);
     private sealed record LayerState(Guid Id, string Name, bool IsVisible, bool IsMuted, bool MuteLeftChannel, bool MuteRightChannel, TimelineLayerKind Kind,
         PlacementState[] Placements, GraphicState[] Graphics, double Volume = 1, double AnchorX = .5, double AnchorY = .5);
@@ -54,11 +57,13 @@ public partial class MainWindow : Window
     private readonly List<ProjectSession> _projects = [];
     private ProjectSession _project = new();
     private List<ClipItem> _clips => _project.Clips;
+    private List<string> _animations => _project.Animations;
     private Dictionary<ClipItem, UndoHistory<ClipSnapshot>> _histories => _project.Histories;
     private TimelineComposition _composition => _project.Composition;
     private Point? _dragStart;
     private MediaSegment? _dragSegment;
     private Point? _trayDragStart;
+    private string? _trayDragAnimation;
     private ClipItem? _trayDragClip;
     private bool _trayDragInProgress;
     private readonly HashSet<ClipItem> _selectedMedia = [];
@@ -147,6 +152,9 @@ public partial class MainWindow : Window
         Player.ScrubbingEnabled = true;
         Panel.SetZIndex(WaveformCanvas, 3); Panel.SetZIndex(CutOverlay, 4);
         _tools = FfmpegLocator.Find(); var runner = new ProcessRunner(); _probe = new(_tools, runner); _engine = new(_tools, runner); _engine.EncoderPreference = _settings.VideoEncoder;
+        // Plugins come up once the window exists, so anything they add lands on a real menu.
+        Loaded += (_, _) => StartPlugins();
+        Closed += (_, _) => _plugins.ShutdownAll();
         EnsureProjectHistory(); InitializeExportJobs();
         _keyframeStrip = new KeyframeTimeline(showList: false); KeyframeStrip.Child = _keyframeStrip;
         _timer.Tick += Timer_Tick; _timer.Start(); PreviewVolume.Value = _settings.PreviewVolume;
@@ -194,11 +202,21 @@ public partial class MainWindow : Window
 
     private async Task LoadFilesAsync(IEnumerable<string> paths, bool initializeComposition = true)
     {
-        var files = paths.Where(MediaProbeService.IsSupported).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); if (files.Length == 0) return;
+        var incoming = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // A Lottie is not something ffmpeg can probe, so it joins the panel as an animation
+        // rather than a clip. Everything else goes through the usual inspection.
+        foreach (var animation in incoming.Where(IsLottieFile)) AddAnimationMedia(animation, false);
+        var files = incoming.Where(MediaProbeService.IsSupported).ToArray();
+        if (files.Length == 0) { RefreshTray(); return; }
+        // Both of these ask the user something, so they happen before the busy overlay
+        // goes up rather than behind it.
+        OfferCopyOnImport();
+        await EnsureProjectHomeAsync(files[0]);
         await RunBusyAsync("Inspecting clips…", async token =>
         {
-            foreach (var path in files)
+            foreach (var original in files)
             {
+                var path = ImportedPath(original);
                 if (_clips.Any(c => c.SourcePath.Equals(path, StringComparison.OrdinalIgnoreCase))) continue;
                 var media = await _probe.ProbeAsync(path, token); var clip = new ClipItem { SourcePath = path, Media = media };
                 clip.Segments.Add(new MediaSegment { SourceStart = TimeSpan.Zero, SourceEnd = media.Duration });
@@ -208,6 +226,39 @@ public partial class MainWindow : Window
             CommitProjectEdit(); RefreshTray(); if (_current is null && _clips.FirstOrDefault(clip => !clip.Media.IsStillImage) is { } previewable) await SwitchClipAsync(previewable, token);
         });
         if (_current is null && _composition.HasVisibleGraphics) await StartLivePreviewAsync(false);
+    }
+
+    /// <summary>A JSON or .lottie file that Post can actually read as an animation.</summary>
+    private bool IsLottieFile(string path)
+    {
+        var extension = System.IO.Path.GetExtension(path);
+        if (!extension.Equals(".json", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".lottie", StringComparison.OrdinalIgnoreCase)) return false;
+        return LottieFor(path) is not null;
+    }
+
+    /// <summary>
+    /// Puts an animation in the media panel alongside the clips. It is remembered with the
+    /// project, and also in settings, so it stays offered in the next one.
+    /// </summary>
+    private void AddAnimationMedia(string path, bool announce = true)
+    {
+        if (_animations.Any(item => item.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
+        if (LottieFor(path) is null)
+        {
+            if (announce) MessageBox.Show(this, $"{System.IO.Path.GetFileName(path)} is not a Lottie animation Post can read.", "Animations", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        EnsureProjectHistory();
+        _animations.Add(path);
+        RememberAnimation(path);
+        CommitProjectEdit();
+        RefreshTray();
+    }
+
+    private void RemoveAnimationMedia(string path)
+    {
+        if (!_animations.Remove(path)) return;
+        CommitProjectEdit(); RefreshTray();
     }
 
     private void RefreshTray()
@@ -236,9 +287,19 @@ public partial class MainWindow : Window
             var content = new Grid(); content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) }); content.ColumnDefinitions.Add(new ColumnDefinition());
             var icon = new Border { Width = 32, Height = 32, CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(Color.FromRgb(18, 46, 72)), BorderBrush = (Brush)FindResource("BorderBrush"), BorderThickness = new Thickness(1), Child = CreateMediaTypeIcon(clip) };
             var details = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch }; details.Children.Add(new TextBlock { Text = clip.DisplayName, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Left, HorizontalAlignment = HorizontalAlignment.Stretch }); details.Children.Add(new TextBlock { Text = $"{clip.Media.Resolution}  •  {clip.Media.Duration:mm\\:ss}", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 10, TextAlignment = TextAlignment.Left, HorizontalAlignment = HorizontalAlignment.Stretch }); Grid.SetColumn(details, 1); content.Children.Add(icon); content.Children.Add(details);
+            if (clip.IsOffline)
+            {
+                icon.Background = new SolidColorBrush(Color.FromRgb(74, 22, 30));
+                icon.BorderBrush = new SolidColorBrush(Color.FromRgb(212, 88, 104));
+                details.Children.Add(new TextBlock { Text = "OFFLINE — click to locate", Foreground = new SolidColorBrush(Color.FromRgb(255, 148, 162)), FontSize = 10, FontWeight = FontWeights.SemiBold });
+            }
             var button = new Button { Content = content, Tag = clip, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(6), Margin = new Thickness(1, 2, 1, 2), ToolTip = $"Click to preview\nCtrl+Click selects individual media\nShift+Click selects a range\nDrag the selection into Layers\n{clip.SourcePath}" };
             ApplyMediaSelectionVisual(button, clip);
-            button.Click += async (_, _) => { if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) await PreviewProjectMediaAsync(clip); };
+            button.Click += async (_, _) =>
+            {
+                if (clip.IsOffline) { await RelinkClipAsync(clip); return; }
+                if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) await PreviewProjectMediaAsync(clip);
+            };
             button.PreviewMouseLeftButtonDown += (_, e) => { SelectProjectMedia(clip); _trayDragStart = e.GetPosition(button); _trayDragClip = clip; };
             button.PreviewMouseMove += (_, e) =>
             {
@@ -250,11 +311,70 @@ public partial class MainWindow : Window
             };
             var menu = new ContextMenu();
             var previewLabel = clip.Media.IsStillImage ? "Preview Image" : clip.Media.HasVideo ? "Preview Video" : "Preview Audio";
-            var preview = new MenuItem { Header = previewLabel }; preview.Click += async (_, _) => await PreviewProjectMediaAsync(clip); menu.Items.Add(preview); menu.Items.Add(new Separator());
+            var preview = new MenuItem { Header = previewLabel }; preview.Click += async (_, _) => await PreviewProjectMediaAsync(clip); menu.Items.Add(preview);
+            var relink = new MenuItem { Header = clip.IsOffline ? "Locate this file…" : "Relink to another file…" };
+            relink.Click += async (_, _) => await RelinkClipAsync(clip); menu.Items.Add(relink);
+            menu.Items.Add(new Separator());
             var remove = new MenuItem { Header = "Remove media from project" }; remove.Click += (_, _) => { if (MessageBox.Show(this, $"Remove {clip.DisplayName} from this project?\nThe source file will not be deleted.", "Remove project media", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes) RemoveClip(clip); }; menu.Items.Add(remove); button.ContextMenu = menu;
             ProjectMediaList.Children.Add(button);
         }
+
+        foreach (var animation in _animations) ProjectMediaList.Children.Add(BuildAnimationMediaEntry(animation));
     }
+
+    /// <summary>
+    /// An animation's row in the media panel. It behaves like a still: click to see it,
+    /// drag it onto the layers, or add it straight from the menu.
+    /// </summary>
+    private Button BuildAnimationMediaEntry(string path)
+    {
+        var content = new Grid();
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
+        content.ColumnDefinitions.Add(new ColumnDefinition());
+        var preview = LottieFor(path)?.RenderFrame(TimeSpan.Zero, 32, 32);
+        var icon = new Border
+        {
+            Width = 32, Height = 32, CornerRadius = new CornerRadius(4),
+            Background = new SolidColorBrush(Color.FromRgb(18, 46, 72)),
+            BorderBrush = (Brush)FindResource("BorderBrush"), BorderThickness = new Thickness(1),
+            Child = preview is null
+                ? new TextBlock { Text = "✦", FontSize = 15, Foreground = (Brush)FindResource("CyanBrush"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+                : new Image { Source = preview, Stretch = Stretch.Uniform },
+        };
+        var details = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+        details.Children.Add(new TextBlock { Text = System.IO.Path.GetFileNameWithoutExtension(path), Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Left, HorizontalAlignment = HorizontalAlignment.Stretch });
+        details.Children.Add(new TextBlock { Text = $"Animation  •  {DescribeAnimation(path)}", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 10, TextAlignment = TextAlignment.Left, HorizontalAlignment = HorizontalAlignment.Stretch });
+        Grid.SetColumn(details, 1);
+        content.Children.Add(icon); content.Children.Add(details);
+
+        var button = new Button
+        {
+            Content = content, Tag = path, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(6), Margin = new Thickness(1, 2, 1, 2),
+            ToolTip = $"{path}\nDrag onto the layers, or double-click to add it",
+        };
+        button.MouseDoubleClick += (_, _) => AddAnimationToTimeline(path, true);
+        button.PreviewMouseLeftButtonDown += (_, e) => { _trayDragStart = e.GetPosition(button); _trayDragAnimation = path; };
+        button.PreviewMouseMove += (_, e) =>
+        {
+            if (_trayDragInProgress || _trayDragStart is not { } start || _trayDragAnimation != path
+                || e.LeftButton != MouseButtonState.Pressed || Math.Abs(e.GetPosition(button).X - start.X) < 5) return;
+            _trayDragInProgress = true; _trayDragStart = null; _trayDragAnimation = null;
+            try { DragDrop.DoDragDrop(button, new AnimationDragPayload(path), DragDropEffects.Copy); }
+            finally { _trayDragInProgress = false; }
+        };
+
+        var menu = new ContextMenu();
+        var add = new MenuItem { Header = "Add to timeline" }; add.Click += (_, _) => AddAnimationToTimeline(path, true);
+        var remove = new MenuItem { Header = "Remove animation from project" };
+        remove.Click += (_, _) => RemoveAnimationMedia(path);
+        menu.Items.Add(add); menu.Items.Add(new Separator()); menu.Items.Add(remove);
+        button.ContextMenu = menu;
+        return button;
+    }
+
+    /// <summary>Carries an animation through a drag, so a drop can tell it from a clip.</summary>
+    internal sealed record AnimationDragPayload(string Path);
 
     private void SelectProjectMedia(ClipItem clip)
     {
@@ -343,6 +463,19 @@ public partial class MainWindow : Window
         await OpenProjectFilesAsync(dialog.FileNames);
     }
 
+    /// <summary>
+    /// Stands in for a source that could not be found, using what the project recorded
+    /// about it so the timeline keeps its shape until the file is relinked.
+    /// </summary>
+    private static MediaInfo OfflineMedia(ProjectClipDocument saved)
+    {
+        var duration = saved.DurationSeconds > 0
+            ? TimeSpan.FromSeconds(saved.DurationSeconds)
+            : TimeSpan.FromSeconds(saved.Segments.Length > 0 ? saved.Segments.Max(segment => segment.EndSeconds) : 0);
+        return new MediaInfo(saved.SourcePath, duration, saved.Width, saved.Height, saved.FrameRate,
+            saved.VideoCodec ?? "", saved.AudioCodec, 0);
+    }
+
     private async Task OpenProjectFilesAsync(IEnumerable<string> paths)
     {
         var projectPaths = paths.Where(path => File.Exists(path) && IsProjectFile(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -357,8 +490,15 @@ public partial class MainWindow : Window
                 var clipMap = new ClipItem?[dto.Clips.Length];
                 for (var i = 0; i < dto.Clips.Length; i++)
                 {
-                    var saved = dto.Clips[i]; if (!File.Exists(saved.SourcePath)) { missing.Add(saved.SourcePath); continue; }
-                    var media = await _probe.ProbeAsync(saved.SourcePath, token); var clip = new ClipItem { SourcePath = saved.SourcePath, Media = media };
+                    var saved = dto.Clips[i];
+                    // The file is looked for where it was, then beside the project, so a
+                    // project and its media moved together still open. Anything still not
+                    // found is kept as an offline clip rather than being dropped: every
+                    // placement, effect and keyframe that uses it survives to be relinked.
+                    var found = MediaPaths.Resolve(saved.SourcePath, saved.RelativePath, System.IO.Path.GetDirectoryName(path));
+                    if (found is null) missing.Add(saved.SourcePath);
+                    var media = found is null ? OfflineMedia(saved) : await _probe.ProbeAsync(found, token);
+                    var clip = new ClipItem { SourcePath = found ?? saved.SourcePath, Media = media, IsOffline = found is null };
                     foreach (var segment in saved.Segments) { var start = ClampTime(TimeSpan.FromSeconds(segment.StartSeconds), TimeSpan.Zero, media.Duration); var end = ClampTime(TimeSpan.FromSeconds(segment.EndSeconds), start, media.Duration); if (end > start) clip.Segments.Add(new MediaSegment { SourceStart = start, SourceEnd = end }); }
                     if (clip.Segments.Count == 0) clip.Segments.Add(new MediaSegment { SourceStart = TimeSpan.Zero, SourceEnd = media.Duration });
                     project.Clips.Add(clip); clipMap[i] = clip; var history = new UndoHistory<ClipSnapshot>(30); history.Push(clip.Snapshot()); project.Histories[clip] = history;
@@ -367,7 +507,7 @@ public partial class MainWindow : Window
                 foreach (var savedLayer in dto.Layers)
                 {
                     var legacyAudioMute = savedLayer.Kind == TimelineLayerKind.Audio && savedLayer.IsMuted && !savedLayer.MuteLeftChannel && !savedLayer.MuteRightChannel;
-                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind, Volume = savedLayer.Volume, AnchorX = savedLayer.AnchorX, AnchorY = savedLayer.AnchorY }; project.Composition.Layers.Add(layer);
+                    var layer = new TimelineLayer { Name = savedLayer.Name, IsVisible = savedLayer.IsVisible, IsMuted = savedLayer.Kind == TimelineLayerKind.Audio ? false : savedLayer.IsMuted, MuteLeftChannel = savedLayer.MuteLeftChannel || legacyAudioMute, MuteRightChannel = savedLayer.MuteRightChannel || legacyAudioMute, Kind = savedLayer.Kind, Volume = savedLayer.Volume, AnchorX = savedLayer.AnchorX, AnchorY = savedLayer.AnchorY , ChannelSource = savedLayer.ChannelSource}; project.Composition.Layers.Add(layer);
                     foreach (var savedPlacement in savedLayer.Placements) if (savedPlacement.ClipIndex >= 0 && savedPlacement.ClipIndex < clipMap.Length && clipMap[savedPlacement.ClipIndex] is { } clip) { var placement = TimelineOperations.AddPlacement(layer, clip, TimeSpan.FromSeconds(Math.Max(0, savedPlacement.StartSeconds))); placement.SpinDegreesPerSecond = savedPlacement.SpinDegreesPerSecond; placement.InPoint = TimeSpan.FromSeconds(Math.Max(0, savedPlacement.InSeconds)); placement.Length = savedPlacement.DurationSeconds is { } length ? TimeSpan.FromSeconds(Math.Max(0, length)) : null; foreach (var keyframe in savedPlacement.Keyframes ?? []) placement.Keyframes.Add(FromDocument(keyframe, placement.Duration)); foreach (var effect in savedPlacement.Effects ?? []) placement.Effects.Add(FromDocument(effect)); }
                     foreach (var saved in savedLayer.Graphics ?? [])
                     {
@@ -377,6 +517,7 @@ public partial class MainWindow : Window
                     }
                 }
                 foreach (var effect in dto.OutputEffects ?? []) project.Composition.OutputEffects.Add(FromDocument(effect));
+                foreach (var animation in dto.Animations ?? []) if (File.Exists(animation)) project.Animations.Add(animation);
                 if (dto.Equalizer is { } savedEqualizer && savedEqualizer.Bands.Length > 0)
                 {
                     project.Composition.Equalizer.IsEnabled = savedEqualizer.IsEnabled; project.Composition.Equalizer.GainDb = savedEqualizer.GainDb;
@@ -390,7 +531,7 @@ public partial class MainWindow : Window
         if (loaded.Count == 0) return;
         if (_projects.Count == 1 && _project.FilePath is null && _project.Clips.Count == 0) _projects.Clear();
         _projects.AddRange(loaded); _project = loaded[^1]; await SwitchProjectContentsAsync();
-        if (missing.Count > 0) MessageBox.Show(this, $"The project opened, but {missing.Distinct(StringComparer.OrdinalIgnoreCase).Count()} source file(s) could not be found. Their timeline placements were skipped.", "Missing project media", MessageBoxButton.OK, MessageBoxImage.Warning);
+        if (missing.Count > 0) MessageBox.Show(this, $"The project opened, but {missing.Distinct(StringComparer.OrdinalIgnoreCase).Count()} source file(s) could not be found. They are marked OFFLINE in the Media panel, with everything on the timeline intact. Click one to locate it, and Post will offer to find the rest in the same folder.", "Missing project media", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private async void SaveProject_Click(object sender, RoutedEventArgs e) => await SaveProjectAsync(_project);
@@ -428,13 +569,19 @@ public partial class MainWindow : Window
         }
         var clipIndexes = project.Clips.Select((clip, index) => (clip, index)).ToDictionary(item => item.clip, item => item.index);
         var dto = new PostProjectDocument(1, System.IO.Path.GetFileNameWithoutExtension(path), project.Composition.WorkspaceDuration.TotalSeconds, project.Composition.RenderWorkspaceTailAsBlack,
-            project.Clips.Select(clip => new ProjectClipDocument(clip.SourcePath, clip.Segments.Select(segment => new ProjectSegmentDocument(segment.SourceStart.TotalSeconds, segment.SourceEnd.TotalSeconds)).ToArray())).ToArray(),
+            project.Clips.Select(clip => new ProjectClipDocument(clip.SourcePath,
+                clip.Segments.Select(segment => new ProjectSegmentDocument(segment.SourceStart.TotalSeconds, segment.SourceEnd.TotalSeconds)).ToArray(),
+                MediaPaths.RelativeTo(System.IO.Path.GetDirectoryName(path), clip.SourcePath),
+                // Recorded so a missing file can still be stood in for with the right shape.
+                clip.Media.Duration.TotalSeconds, clip.Media.Width, clip.Media.Height,
+                clip.Media.FrameRate, clip.Media.VideoCodec, clip.Media.AudioCodec)).ToArray(),
             project.Composition.Layers.Select(layer => new ProjectLayerDocument(layer.Name, layer.IsVisible, layer.IsMuted,
                 layer.Placements.Where(placement => clipIndexes.ContainsKey(placement.Clip)).Select(placement => new ProjectPlacementDocument(clipIndexes[placement.Clip], placement.Start.TotalSeconds, placement.InPoint.TotalSeconds, placement.Duration.TotalSeconds, placement.Keyframes.Select(ToDocument).ToArray(), placement.Effects.Select(ToDocument).ToArray(), placement.SpinDegreesPerSecond)).ToArray(),
-                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle, graphic.SpinDegreesPerSecond)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel, layer.Volume, layer.AnchorX, layer.AnchorY)).ToArray(),
+                layer.Kind, layer.Graphics.Select(graphic => new ProjectGraphicsDocument(graphic.Kind, graphic.Text, graphic.ImagePath, graphic.FontFamily, graphic.FontSize, graphic.Foreground, graphic.Background, graphic.Opacity, graphic.PreserveAspectRatio, graphic.X, graphic.Y, graphic.Width, graphic.Height, graphic.Start.TotalSeconds, graphic.Duration.TotalSeconds, graphic.Keyframes.Select(ToDocument).ToArray(), graphic.FillColor1, graphic.FillColor2, graphic.UseSecondFillColor, graphic.GradientKind, graphic.GradientAngle, graphic.SpinDegreesPerSecond)).ToArray(), layer.MuteLeftChannel, layer.MuteRightChannel, layer.Volume, layer.AnchorX, layer.AnchorY, layer.ChannelSource)).ToArray(),
             project.Composition.OutputEffects.Select(ToDocument).ToArray(),
             new ProjectEqualizerDocument(project.Composition.Equalizer.IsEnabled, project.Composition.Equalizer.GainDb,
-                project.Composition.Equalizer.Bands.Select(band => new ProjectEqualizerBandDocument(band.FrequencyHz, band.GainDb, band.Width)).ToArray()));
+                project.Composition.Equalizer.Bands.Select(band => new ProjectEqualizerBandDocument(band.FrequencyHz, band.GainDb, band.Width)).ToArray()),
+            project.Animations.ToArray());
         await PostProjectStore.SaveAsync(path, dto); project.FilePath = path; project.Name = System.IO.Path.GetFileNameWithoutExtension(path); RememberRecentProject(path); RefreshProjectTabs();
     }
 
@@ -461,7 +608,9 @@ public partial class MainWindow : Window
 
     private void InitializeCompositionFrom(ClipItem item)
     {
-        if (_composition.Layers.Count > 0) return;
+        // Graphics layers made before any media do not count: the first clip still gets a
+        // layer of its own, and only real placements mean the timeline is already laid out.
+        if (_composition.Layers.Any(layer => layer.Placements.Count > 0)) return;
         if (item.Media.IsStillImage)
         {
             var layer = new TimelineLayer { Name = "Image 1", Kind = TimelineLayerKind.Graphics };
@@ -615,7 +764,8 @@ public partial class MainWindow : Window
         return new(project.Clips.Select(clip => new ClipState(clip, clip.Snapshot())).ToArray(), layers,
             project.Composition.WorkspaceDuration, project.Composition.RenderWorkspaceTailAsBlack,
             _activeLayerId, _selectedPlacementId, _selectedGraphicId, project.AutomaticPlacementId, _sequencePosition, _editPosition,
-            project.Composition.OutputEffects.Select(effect => effect.Clone()).ToArray(), project.Composition.Equalizer.Clone());
+            project.Composition.OutputEffects.Select(effect => effect.Clone()).ToArray(), project.Composition.Equalizer.Clone(),
+            project.Animations.ToArray());
     }
 
     private void EnsureProjectHistory()
@@ -642,6 +792,7 @@ public partial class MainWindow : Window
         }
         _composition.OutputEffects.Clear(); foreach (var effect in state.OutputEffects) _composition.OutputEffects.Add(effect.Clone());
         _composition.Equalizer.CopyFrom(state.Equalizer);
+        _animations.Clear(); _animations.AddRange(state.Animations ?? []);
         _composition.WorkspaceDuration = state.WorkspaceDuration; _composition.RenderWorkspaceTailAsBlack = state.RenderWorkspaceTailAsBlack;
         _activeLayerId = state.ActiveLayerId; _selectedPlacementId = state.SelectedPlacementId; _selectedGraphicId = state.SelectedGraphicId;
         _project.AutomaticPlacementId = state.AutomaticPlacementId; _sequencePosition = ClampTime(state.SequencePosition, TimeSpan.Zero, _composition.DisplayDuration); _editPosition = ClampTime(state.EditPosition, TimeSpan.Zero, _composition.DisplayDuration);
@@ -919,7 +1070,7 @@ public partial class MainWindow : Window
                 var x = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.PositionX, localOffset, .5); var y = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.PositionY, localOffset, .5); var animatedVolume = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Volume, localOffset, 1);
                 player.Visibility = Visibility.Visible; player.Opacity = layer.Kind == TimelineLayerKind.Audio ? 0 : (_liveOpenedPlayers.Contains(placement.Id) ? Math.Clamp(opacity, 0, 1) : 0); player.IsMuted = _muted || LayerAudioFullyMuted(layer) || PreviewAudioEngaged; player.Balance = LayerAudioBalance(layer); player.Volume = Math.Clamp(PreviewVolume.Value * animatedVolume * layer.Volume, 0, 1); Panel.SetZIndex(player, layer.Kind == TimelineLayerKind.Audio ? -1 : z--);
                 UpdatePreviewAudioSource(layer, placement, mapped.SourceTime, animatedVolume, play);
-                ApplyPreviewShader(player, placement.Id, [.. placement.Effects, .. _composition.OutputEffects]);
+                ApplyPreviewShader(player, placement.Id, PreviewEffectsFor(placement));
                 player.Stretch = Player.Stretch; player.RenderTransformOrigin = Player.RenderTransformOrigin;
                 var transforms = new TransformGroup(); transforms.Children.Add(new ScaleTransform(CropZoom.Value * scale, CropZoom.Value * scale)); transforms.Children.Add(new TranslateTransform((x - .5) * Math.Max(1, PreviewSurface.ActualWidth), (y - .5) * Math.Max(1, PreviewSurface.ActualHeight))); player.RenderTransform = transforms;
                 var uri = new Uri(path);
@@ -1199,11 +1350,10 @@ public partial class MainWindow : Window
             var row = new Grid { Height = rowHeight, Width = _layerHeaderWidth + splitterWidth + laneWidth, HorizontalAlignment = HorizontalAlignment.Left, Background = new SolidColorBrush(layerIndex % 2 == 0 ? Color.FromRgb(9, 25, 46) : Color.FromRgb(12, 30, 52)) };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(_layerHeaderWidth), MinWidth = 130, MaxWidth = 420 }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(splitterWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(laneWidth) });
             var header = new Border { BorderBrush = layer.Id == _activeLayerId ? (Brush)FindResource("CyanBrush") : (Brush)FindResource("BorderBrush"), BorderThickness = new Thickness(0, 0, 1, 1), Padding = new Thickness(4, 2, 4, 2) };
-            var layerMenu = CreateLayerMenu(layer);
-            header.ContextMenu = layerMenu;
+            header.ContextMenu = CreateLayerMenu(layer);
             var controls = new Grid(); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) }); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) }); controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
             var name = new TextBox { Text = layer.Name, Padding = new Thickness(3, 1, 3, 1), Margin = new Thickness(0), FontSize = 11, FontWeight = FontWeights.SemiBold, Background = new SolidColorBrush(Color.FromArgb(45, 70, 120, 160)), BorderThickness = new Thickness(0), Foreground = Brushes.White, ToolTip = "Click to select and rename this layer" };
-            name.ContextMenu = layerMenu;
+            name.ContextMenu = CreateLayerMenu(layer);
             name.GotKeyboardFocus += (_, _) => { _activeLayerId = layer.Id; name.SelectAll(); };
             name.LostKeyboardFocus += (_, _) => { var value = name.Text.Trim(); if (!string.IsNullOrWhiteSpace(value) && value != layer.Name) { EnsureProjectHistory(); layer.Name = value; CommitProjectEdit(); } else name.Text = layer.Name; };
             name.KeyDown += (_, e) => { if (e.Key == Key.Enter) { var value = name.Text.Trim(); if (!string.IsNullOrWhiteSpace(value)) layer.Name = value; Keyboard.ClearFocus(); e.Handled = true; } };
@@ -1234,7 +1384,7 @@ public partial class MainWindow : Window
             if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(playLayer); buttons.Children.Add(up); buttons.Children.Add(down);
             if (layer.Kind != TimelineLayerKind.Graphics) buttons.Children.Add(BuildLayerVolume(layer));
             buttons.Children.Add(removeLayer); Grid.SetRow(buttons, 2);
-            controls.ContextMenu = layerMenu;
+            controls.ContextMenu = CreateLayerMenu(layer);
             controls.Children.Add(name); controls.Children.Add(toggles); controls.Children.Add(buttons); header.Child = controls; row.Children.Add(header);
 
             var headerResize = new Thumb { Width = splitterWidth, Cursor = Cursors.SizeWE, Background = new SolidColorBrush(Color.FromRgb(47, 89, 114)), ToolTip = "Drag to resize layer headers" };
@@ -1257,7 +1407,7 @@ public partial class MainWindow : Window
                 var width = Math.Max(36, graphic.Duration.TotalSeconds / display.TotalSeconds * laneWidth);
                 var selected = graphic.Id == _selectedGraphicId;
                 var kindName = GraphicKindName(graphic.Kind);
-                var block = new Border { Width = width, Height = 52, CornerRadius = new CornerRadius(5), BorderBrush = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(203, 116, 255)), BorderThickness = selected ? new Thickness(3) : new Thickness(1.5), Background = new SolidColorBrush(Color.FromRgb(68, 33, 91)), ClipToBounds = true, ToolTip = $"{kindName} overlay\nStart {TimeText.Format(graphic.Start)} • Duration {TimeText.Format(graphic.Duration)}\nDrag to move • drag either edge to change duration" };
+                var block = new Border { Width = width, Height = 52, CornerRadius = new CornerRadius(5), BorderBrush = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(203, 116, 255)), BorderThickness = selected ? new Thickness(3) : new Thickness(1.5), Background = new SolidColorBrush(Color.FromRgb(68, 33, 91)), ClipToBounds = true, Tag = graphic, ToolTip = $"{kindName} overlay\nStart {TimeText.Format(graphic.Start)} • Duration {TimeText.Format(graphic.Duration)}\nDrag to move • drag either edge to change duration" };
                 var content = new Grid();
                 var graphicLabel = graphic.Kind switch { GraphicsOverlayKind.Text => $"T  {graphic.Text}", GraphicsOverlayKind.Image => $"▧  {System.IO.Path.GetFileName(graphic.ImagePath)}", GraphicsOverlayKind.SolidColor => $"■  {graphic.FillColor1}", GraphicsOverlayKind.Gradient => $"◩  {graphic.FillColor1} → {graphic.FillColor2}", _ => kindName };
                 content.Children.Add(new TextBlock { Text = graphicLabel, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(13, 0, 13, 0) });
@@ -1476,7 +1626,7 @@ public partial class MainWindow : Window
         exportGif.Click += (_, _) => _ = ExportPlacementAsGifAsync(placement, gifDuration);
         var duplicate = new MenuItem { Header = "Duplicate clip to new layer" }; duplicate.Click += (_, _) => DuplicatePlacementToNewLayer(placement);
         var remove = new MenuItem { Header = "Remove clip from layer" }; remove.Click += (_, _) => { EnsureProjectHistory(); TimelineOperations.RemovePlacement(_composition, placement.Id); if (_selectedPlacementId == placement.Id) _selectedPlacementId = null; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); DrawCuts(); };
-        menu.Items.Add(play); menu.Items.Add(new Separator()); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(split); menu.Items.Add(duplicate); menu.Items.Add(export); menu.Items.Add(exportGif); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        menu.Items.Add(play); menu.Items.Add(new Separator()); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(split); menu.Items.Add(duplicate); menu.Items.Add(export); menu.Items.Add(exportGif); menu.Items.Add(new Separator()); menu.Items.Add(remove); AddPluginClipCommands(menu, layer, placement); return menu;
     }
 
     /// <summary>
@@ -1510,7 +1660,42 @@ public partial class MainWindow : Window
         var duplicate = new MenuItem { Header = "Duplicate layer" }; duplicate.Click += (_, _) => DuplicateLayer(layer);
         var anchor = new MenuItem { Header = "Set Anchor Point (rotation centre)…" }; anchor.Click += (_, _) => SetAnchorPoint(layer);
         var remove = new MenuItem { Header = "Delete layer" }; remove.Click += (_, _) => RemoveLayer(layer);
-        menu.Items.Add(duplicate); menu.Items.Add(anchor); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        var split = new MenuItem
+        {
+            Header = "Split audio into two mono layers",
+            IsEnabled = layer.ChannelSource == AudioChannelSource.Both && layer.Placements.Count > 0,
+            ToolTip = "One layer per channel, each played centred rather than in one ear",
+        };
+        split.Click += (_, _) => SplitLayerChannels(layer);
+        menu.Items.Add(duplicate); menu.Items.Add(anchor);
+        if (layer.Kind == TimelineLayerKind.Audio) menu.Items.Add(split);
+        menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+    }
+
+    /// <summary>
+    /// Turns one stereo layer into two, each playing a single channel centred, so a
+    /// two-microphone recording becomes two tracks that can be edited apart.
+    /// </summary>
+    private void SplitLayerChannels(TimelineLayer layer)
+    {
+        if (layer.Placements.Count == 0) { MessageBox.Show(this, "There is nothing on that layer to split.", "Split audio", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (layer.Placements.All(item => !item.Clip.Media.HasAudio)) { MessageBox.Show(this, "That layer has no audio to split.", "Split audio", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+
+        EnsureProjectHistory();
+        var right = TimelineOperations.DuplicateLayer(_composition, layer.Id);
+        if (right is null) return;
+
+        layer.ChannelSource = AudioChannelSource.Left;
+        layer.MuteLeftChannel = false; layer.MuteRightChannel = false;
+        layer.Name = $"{layer.Name} L";
+        right.ChannelSource = AudioChannelSource.Right;
+        right.MuteLeftChannel = false; right.MuteRightChannel = false;
+        right.Name = right.Name.EndsWith(" copy", StringComparison.OrdinalIgnoreCase)
+            ? right.Name[..^5].TrimEnd() + " R"
+            : $"{right.Name} R";
+
+        _activeLayerId = right.Id; _selectedPlacementId = null; _selectedGraphicId = null;
+        InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); DrawCuts();
     }
 
     private void DuplicateLayer(TimelineLayer layer)
@@ -1528,10 +1713,38 @@ public partial class MainWindow : Window
         ExtendWorkspace(copy.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); DrawCuts();
     }
 
+    /// <summary>
+    /// Repaints which overlay looks selected, and points the keyframe strip at it. This
+    /// exists instead of a full refresh because the lanes are rebuilt from scratch by one,
+    /// which would throw away the block a drag has just started on.
+    /// </summary>
+    private void RefreshOverlaySelection()
+    {
+        if (LayerStack is null) return;
+        foreach (var block in Descendants(LayerStack).OfType<Border>())
+        {
+            if (block.Tag is not GraphicsOverlay graphic) continue;
+            var selected = graphic.Id == _selectedGraphicId;
+            block.BorderBrush = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(203, 116, 255));
+            block.BorderThickness = selected ? new Thickness(3) : new Thickness(1.5);
+        }
+        RefreshKeyframeStrip();
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var nested in Descendants(child)) yield return nested;
+        }
+    }
+
     private void AttachGraphicInteractions(Border item, Canvas lane, TimelineLayer layer, GraphicsOverlay graphic)
     {
         Point? start = null;
-        item.PreviewMouseLeftButtonDown += (_, e) => { if (IsInsideThumb(e.OriginalSource as DependencyObject)) return; ReturnToTimelinePreview(); _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; start = e.GetPosition(item); _dragGraphic = graphic; _graphicDragOffset = TimeSpan.FromSeconds(Math.Clamp(e.GetPosition(item).X / Math.Max(1, item.ActualWidth), 0, 1) * graphic.Duration.TotalSeconds); SetEditPosition(graphic.Start + _graphicDragOffset); e.Handled = true; };
+        item.PreviewMouseLeftButtonDown += (_, e) => { if (IsInsideThumb(e.OriginalSource as DependencyObject)) return; ReturnToTimelinePreview(); _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; RefreshOverlaySelection(); start = e.GetPosition(item); _dragGraphic = graphic; _graphicDragOffset = TimeSpan.FromSeconds(Math.Clamp(e.GetPosition(item).X / Math.Max(1, item.ActualWidth), 0, 1) * graphic.Duration.TotalSeconds); SetEditPosition(graphic.Start + _graphicDragOffset); e.Handled = true; };
         item.PreviewMouseMove += (_, e) => { if (start is not { } origin || _dragGraphic != graphic || e.LeftButton != MouseButtonState.Pressed || Math.Abs(e.GetPosition(item).X - origin.X) < 5) return; DragDrop.DoDragDrop(item, graphic, DragDropEffects.Move); start = null; _dragGraphic = null; };
         item.PreviewMouseLeftButtonUp += (_, _) => { start = null; _dragGraphic = null; };
     }
@@ -1543,8 +1756,8 @@ public partial class MainWindow : Window
         left.DragDelta += (_, e) => { var delta = TimeSpan.FromSeconds(e.HorizontalChange / Math.Max(1, lane.Width) * Math.Max(.001, _composition.DisplayDuration.TotalSeconds)); var end = graphic.End; graphic.Start = ClampTime(graphic.Start + delta, TimeSpan.Zero, end - TimeSpan.FromMilliseconds(100)); graphic.Duration = end - graphic.Start; UpdateGraphicBlock(left, lane, graphic); };
         right.DragStarted += (_, _) => { originalStart = graphic.Start; originalDuration = graphic.Duration; };
         right.DragDelta += (_, e) => { var delta = TimeSpan.FromSeconds(e.HorizontalChange / Math.Max(1, lane.Width) * Math.Max(.001, _composition.DisplayDuration.TotalSeconds)); graphic.Duration = graphic.Duration + delta < TimeSpan.FromMilliseconds(100) ? TimeSpan.FromMilliseconds(100) : graphic.Duration + delta; ExtendWorkspace(graphic.End); UpdateGraphicBlock(right, lane, graphic); };
-        left.DragCompleted += (_, _) => { if (graphic.Start != originalStart || graphic.Duration != originalDuration) { InvalidateCompositionPreview(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); } };
-        right.DragCompleted += (_, _) => { if (graphic.Start != originalStart || graphic.Duration != originalDuration) { InvalidateCompositionPreview(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); } };
+        left.DragCompleted += (_, _) => { if (graphic.Start != originalStart || graphic.Duration != originalDuration) { InvalidateCompositionPreview(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); } };
+        right.DragCompleted += (_, _) => { if (graphic.Start != originalStart || graphic.Duration != originalDuration) { InvalidateCompositionPreview(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); } };
     }
 
     private static bool IsInsideThumb(DependencyObject? item)
@@ -1566,13 +1779,13 @@ public partial class MainWindow : Window
     private ContextMenu CreateGraphicMenu(TimelineLayer layer, GraphicsOverlay graphic)
     {
         var menu = new ContextMenu();
-        var edit = new MenuItem { Header = "Edit overlay…" }; edit.Click += (_, _) => { EnsureProjectHistory(); var editor = new GraphicsOverlayEditor(graphic) { Owner = this }; if (editor.ShowDialog() == true) { graphic.RenderedImagePath = null; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); } };
+        var edit = new MenuItem { Header = "Edit overlay…" }; edit.Click += (_, _) => { EnsureProjectHistory(); var editor = new GraphicsOverlayEditor(graphic) { Owner = this }; if (editor.ShowDialog() == true) { graphic.RenderedImagePath = null; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); } };
         var keyframes = new MenuItem { Header = "Keyframes…" }; keyframes.Click += (_, _) => { _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; Keyframe_Click(this, new RoutedEventArgs()); };
         var effects = new MenuItem { Header = "Effects…" }; effects.Click += (_, _) => { _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null; EnsureEffectsWindow(); };
         var spin = new MenuItem { Header = "Spin…" }; spin.Click += (_, _) => SetSpin(graphic.Kind == GraphicsOverlayKind.Text ? graphic.Text : "Overlay", graphic.SpinDegreesPerSecond, value => graphic.SpinDegreesPerSecond = value);
         var duplicate = new MenuItem { Header = "Duplicate overlay to new layer" }; duplicate.Click += (_, _) => { EnsureProjectHistory(); var copy = CloneGraphic(graphic); copy.Start = graphic.End; var copyLayer = CreateGraphicsLayer(copy.Kind); copyLayer.Graphics.Add(copy); ExtendWorkspace(copy.End); _activeLayerId = copyLayer.Id; _selectedGraphicId = copy.Id; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); };
-        var remove = new MenuItem { Header = "Remove overlay and layer" }; remove.Click += (_, _) => { EnsureProjectHistory(); layer.Graphics.Remove(graphic); TimelineOperations.RemoveLayer(_composition, layer.Id); if (_selectedGraphicId == graphic.Id) _selectedGraphicId = null; _activeLayerId = _composition.Layers.FirstOrDefault()?.Id; ResetEmptyComposition(); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); };
-        menu.Items.Add(edit); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(duplicate); menu.Items.Add(new Separator()); menu.Items.Add(remove); return menu;
+        var remove = new MenuItem { Header = "Remove overlay and layer" }; remove.Click += (_, _) => { EnsureProjectHistory(); layer.Graphics.Remove(graphic); TimelineOperations.RemoveLayer(_composition, layer.Id); if (_selectedGraphicId == graphic.Id) _selectedGraphicId = null; _activeLayerId = _composition.Layers.FirstOrDefault()?.Id; ResetEmptyComposition(); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); };
+        menu.Items.Add(edit); menu.Items.Add(keyframes); menu.Items.Add(effects); menu.Items.Add(spin); menu.Items.Add(duplicate); menu.Items.Add(new Separator()); menu.Items.Add(remove); AddPluginTextCommands(menu, layer, graphic); return menu;
     }
 
     private (ICollection<AnimationKeyframe> Keyframes, TimeSpan Start, TimeSpan Duration, KeyframeProperty[] Properties, Func<KeyframeProperty, double> Fallback)? SelectedKeyframeTarget()
@@ -1662,7 +1875,7 @@ public partial class MainWindow : Window
     /// <summary>Opens Effects, floating on first use so it behaves like the window it was.</summary>
     private void EnsureEffectsWindow()
     {
-        OpenToolPane("effects", "Effects", 700, 660);
+        OpenToolPane("effects", "Effects", 560, 640);
         EffectsWindowMenuItem.IsChecked = true;
     }
 
@@ -1823,7 +2036,8 @@ public partial class MainWindow : Window
     private void LayersArea_DragOver(object sender, DragEventArgs e)
     {
         if (e.Handled) return;
-        var hasMedia = e.Data.GetDataPresent(typeof(ClipItem[])) || e.Data.GetDataPresent(typeof(ClipItem));
+        var hasMedia = e.Data.GetDataPresent(typeof(ClipItem[])) || e.Data.GetDataPresent(typeof(ClipItem))
+            || e.Data.GetDataPresent(typeof(AnimationDragPayload));
         var hasFiles = e.Data.GetDataPresent(DataFormats.FileDrop);
         e.Effects = hasMedia || hasFiles ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true;
     }
@@ -1831,6 +2045,12 @@ public partial class MainWindow : Window
     private async void LayersArea_Drop(object sender, DragEventArgs e)
     {
         if (e.Handled) return; e.Handled = true;
+        // An animation dropped from the media panel becomes an overlay on its own layer.
+        if (e.Data.GetData(typeof(AnimationDragPayload)) is AnimationDragPayload animation)
+        {
+            AddAnimationToTimeline(animation.Path, true);
+            return;
+        }
         if (!TryClaimLayerDrop(e)) { e.Effects = DragDropEffects.None; return; }
         var start = LayerDropTime(e);
         ClipItem[] items;
@@ -1897,7 +2117,7 @@ public partial class MainWindow : Window
             var source = _composition.Layers.FirstOrDefault(layer => layer.Graphics.Contains(graphic)); if (source is null) return;
             if (!ReferenceEquals(source, target)) { source.Graphics.Remove(graphic); target.Graphics.Add(graphic); if (source.Graphics.Count == 0 && source.Placements.Count == 0) _composition.Layers.Remove(source); }
             graphic.Start = SnapGraphicStart(cursor - _graphicDragOffset, graphic.Duration, graphic.Id, display, lane.ActualWidth);
-            _activeLayerId = target.Id; _selectedGraphicId = graphic.Id; ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); e.Handled = true; return;
+            _activeLayerId = target.Id; _selectedGraphicId = graphic.Id; ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); e.Handled = true; return;
         }
         if (target.Kind == TimelineLayerKind.Graphics) return;
         TimelinePlacement? moved = null;
@@ -1954,7 +2174,7 @@ public partial class MainWindow : Window
                 : new TimelineLayer { Name = $"Image {_composition.Layers.Count(layer => layer.Kind == TimelineLayerKind.Graphics) + 1}", Kind = TimelineLayerKind.Graphics };
             imageLayer.Graphics.Add(graphic); if (!_composition.Layers.Contains(imageLayer)) InsertLayer(imageLayer, insertIndex);
             _activeLayerId = imageLayer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null;
-            ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); return;
+            ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia(); return;
         }
 
         var kind = clip.Media.HasVideo ? TimelineLayerKind.Video : TimelineLayerKind.Audio;
@@ -1996,13 +2216,13 @@ public partial class MainWindow : Window
 
     private void AddLayer_Click(object sender, RoutedEventArgs e)
     {
-        if (_clips.Count == 0) { MessageBox.Show(this, "Add a media file first. Layer 1 will be created automatically at that file's length.", "Post", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        
         EnsureProjectHistory(); var layer = new TimelineLayer { Name = $"Layer {_composition.Layers.Count + 1}" }; _composition.Layers.Add(layer); _activeLayerId = layer.Id; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack();
     }
 
     private void AddAudioLayer_Click(object sender, RoutedEventArgs e)
     {
-        if (_clips.Count == 0) { MessageBox.Show(this, "Add project media before creating an audio layer.", "Post", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        
         var count = _composition.Layers.Count(layer => layer.Kind == TimelineLayerKind.Audio) + 1;
         EnsureProjectHistory(); var layer = new TimelineLayer { Name = $"Audio {count}", Kind = TimelineLayerKind.Audio }; _composition.Layers.Add(layer); _activeLayerId = layer.Id; InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack();
     }
@@ -2025,6 +2245,17 @@ public partial class MainWindow : Window
         _ => "Graphic"
     };
 
+    /// <summary>
+    /// Picks a Lottie animation and puts it in the media panel, the same way choosing an
+    /// image does. From there it is dragged onto the layers like any other media.
+    /// </summary>
+    private void AddAnimationGraphic_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Filter = "Lottie animation|*.json;*.lottie|All files|*.*", Title = "Add an animation", Multiselect = true };
+        if (dialog.ShowDialog(this) != true) return;
+        foreach (var path in dialog.FileNames) AddAnimationMedia(path);
+    }
+
     private void AddGraphic_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button) return;
@@ -2035,15 +2266,16 @@ public partial class MainWindow : Window
         };
         var text = new MenuItem { Header = "Text" }; text.Click += AddTextOverlay_Click;
         var image = new MenuItem { Header = "Image…" }; image.Click += AddPngOverlay_Click;
+        var animation = new MenuItem { Header = "Animation…" }; animation.Click += AddAnimationGraphic_Click;
         var solid = new MenuItem { Header = "Solid Color…" }; solid.Click += (_, args) => AddFillGraphic(GraphicsOverlayKind.SolidColor, args);
         var gradient = new MenuItem { Header = "Gradient…" }; gradient.Click += (_, args) => AddFillGraphic(GraphicsOverlayKind.Gradient, args);
-        menu.Items.Add(text); menu.Items.Add(image); menu.Items.Add(new Separator()); menu.Items.Add(solid); menu.Items.Add(gradient);
+        menu.Items.Add(text); menu.Items.Add(image); menu.Items.Add(animation); menu.Items.Add(solid); menu.Items.Add(gradient);
         menu.IsOpen = true;
     }
 
     private void AddFillGraphic(GraphicsOverlayKind kind, RoutedEventArgs e)
     {
-        if (_clips.Count == 0) { MessageBox.Show(this, "Add project media before creating graphics.", "Post", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        
         var graphic = new GraphicsOverlay
         {
             Kind = kind, Start = _editPosition, Duration = DefaultGraphicDuration(), X = .2, Y = .2, Width = .6, Height = .6,
@@ -2056,21 +2288,31 @@ public partial class MainWindow : Window
 
     private void AddTextOverlay_Click(object sender, RoutedEventArgs e)
     {
-        if (_clips.Count == 0) { MessageBox.Show(this, "Add project media before creating graphics.", "Post", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        
         var graphic = new GraphicsOverlay { Kind = GraphicsOverlayKind.Text, Start = _editPosition, Duration = DefaultGraphicDuration() };
         var editor = new GraphicsOverlayEditor(graphic) { Owner = this }; if (editor.ShowDialog() != true) return;
         var layer = CreateGraphicsLayer(GraphicsOverlayKind.Text); layer.Graphics.Add(graphic); _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null;
-        ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition);
+        ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia();
     }
 
     private void AddPngOverlay_Click(object sender, RoutedEventArgs e)
     {
-        if (_clips.Count == 0) { MessageBox.Show(this, "Add project media before creating graphics.", "Post", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        
         var dialog = new OpenFileDialog { Filter = "Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff", Multiselect = false }; if (dialog.ShowDialog(this) != true) return;
         var graphic = CreateImageGraphic(dialog.FileName, _editPosition); graphic.Duration = DefaultGraphicDuration();
         var editor = new GraphicsOverlayEditor(graphic) { Owner = this }; if (editor.ShowDialog() != true) return;
         var layer = CreateGraphicsLayer(GraphicsOverlayKind.Image); layer.Graphics.Add(graphic); _activeLayerId = layer.Id; _selectedGraphicId = graphic.Id; _selectedPlacementId = null;
-        ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition);
+        ExtendWorkspace(graphic.End); InvalidateCompositionPreview(); CommitProjectEdit(); RefreshLayerStack(); UpdateLiveGraphics(_sequencePosition); ShowGraphicsWithoutMedia();
+    }
+
+    /// <summary>
+    /// Starts the preview when a project has graphics but no media, so something added to
+    /// an empty timeline is visible rather than only listed.
+    /// </summary>
+    private void ShowGraphicsWithoutMedia()
+    {
+        if (_current is not null || _livePreviewActive || !_composition.HasVisibleGraphics) return;
+        _ = StartLivePreviewAsync(false);
     }
 
     private TimeSpan DefaultGraphicDuration()
@@ -2502,7 +2744,7 @@ public partial class MainWindow : Window
     private void Timeline_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (!_timelineUpdating && Timeline.IsMouseCaptureWithin) SetEditPosition(TimeSpan.FromSeconds(e.NewValue)); }
     private void Window_DragOver(object sender, DragEventArgs e) { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; }
     private async void Window_Drop(object sender, DragEventArgs e) { if (e.Handled || e.Data.GetDataPresent(LayerDropHandledFormat)) return; e.Handled = true; if (e.Data.GetData(DataFormats.FileDrop) is string[] files) { var projects = files.Where(IsProjectFile).ToArray(); if (projects.Length > 0) await OpenProjectFilesAsync(projects); var media = files.Except(projects, StringComparer.OrdinalIgnoreCase).ToArray(); if (media.Length > 0) await LoadFilesAsync(media); } }
-    private async void Open_Click(object sender, RoutedEventArgs e) { var d = new OpenFileDialog { Multiselect = true, Filter = "All supported media|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.wmv;*.flv;*.m4v;*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma;*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff|Video files|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.wmv;*.flv;*.m4v|Audio files|*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma|Image files|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff|All files|*.*" }; if (d.ShowDialog(this) == true) await LoadFilesAsync(d.FileNames); }
+    private async void Open_Click(object sender, RoutedEventArgs e) { var d = new OpenFileDialog { Multiselect = true, Filter = "All supported media|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.wmv;*.flv;*.m4v;*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma;*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff;*.json;*.lottie|Video files|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.wmv;*.flv;*.m4v|Audio files|*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma|Image files|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff|Lottie animations|*.json;*.lottie|All files|*.*" }; if (d.ShowDialog(this) == true) await LoadFilesAsync(d.FileNames); }
     private void Player_MediaOpened(object sender, RoutedEventArgs e) { if (_current is not null && _current.Segments.Count > 0) { SeekSequence(_sequencePosition); if (_playWhenMediaOpened) { _playWhenMediaOpened = false; Player.Play(); _playing = true; PlayButton.Content = "❚❚"; } else Player.Pause(); } }
     private void AudioPreviewPlayer_MediaOpened(object? sender, EventArgs e)
     {
@@ -2607,14 +2849,69 @@ public partial class MainWindow : Window
 
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
-        var folder = new TextBox { Text = _settings.DefaultOutputFolder, Margin = new Thickness(0, 6, 0, 12) }; var copy = new CheckBox { Content = "Automatically copy exports to clipboard", IsChecked = _settings.AutoCopyExports, Foreground = Brushes.White, Margin = new Thickness(0, 6, 0, 6) }; var updates = new CheckBox { Content = "Check GitHub Releases for updates", IsChecked = _settings.CheckForUpdates, Foreground = Brushes.White, Margin = new Thickness(0, 6, 0, 8) }; var save = new Button { Content = "Save Settings", IsDefault = true, Width = 130, HorizontalAlignment = HorizontalAlignment.Right };
-        var panel = new StackPanel { Margin = new Thickness(22) }; panel.Children.Add(new TextBlock { Text = "Default export folder", Foreground = Brushes.LightGray }); panel.Children.Add(folder); panel.Children.Add(copy); panel.Children.Add(updates); panel.Children.Add(new TextBlock { Text = "Updates come from the official Post GitHub Releases page.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 10) }); panel.Children.Add(new TextBlock { Text = "Explorer menu: Quick Edit with Post is registered for all supported formats.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap }); panel.Children.Add(save);
-        var window = new Window { Title = "Post Settings", Width = 500, Height = 330, Content = panel, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize }; save.Click += (_, _) => { _settings = _settings with { DefaultOutputFolder = folder.Text, AutoCopyExports = copy.IsChecked == true, CheckForUpdates = updates.IsChecked == true, PreviewVolume = PreviewVolume.Value }; _settings.Save(); window.DialogResult = true; }; window.ShowDialog();
+        var folder = new TextBox { Text = _settings.DefaultOutputFolder, Margin = new Thickness(0, 6, 0, 12) };
+        var copyOnImport = new CheckBox { Content = "Copy media into a folder of my choosing on import", IsChecked = _settings.CopyMediaOnImport, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 2), ToolTip = "Off by default: a project points at your files where they are, which keeps it small and lets several projects share the same footage." };
+        var copyFolder = _settings.MediaCopyFolder;
+        var copyFolderHint = new TextBlock { Foreground = Theme.Hint, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
+        void ShowCopyFolder() => copyFolderHint.Text = copyOnImport.IsChecked == true
+            ? string.IsNullOrWhiteSpace(copyFolder) ? "No folder chosen yet." : $"Copies go to {copyFolder}"
+            : "Imported files are used where they are.";
+        ShowCopyFolder();
+        // Asked at the moment it is switched on, since that is when the answer matters.
+        copyOnImport.Checked += (_, _) =>
+        {
+            if (ChooseMediaFolder() is { } chosen) copyFolder = chosen; else copyOnImport.IsChecked = false;
+            ShowCopyFolder();
+        };
+        copyOnImport.Unchecked += (_, _) => ShowCopyFolder();
+        var copy = new CheckBox { Content = "Automatically copy exports to clipboard", IsChecked = _settings.AutoCopyExports, Foreground = Brushes.White, Margin = new Thickness(0, 6, 0, 6) }; var updates = new CheckBox { Content = "Check GitHub Releases for updates", IsChecked = _settings.CheckForUpdates, Foreground = Brushes.White, Margin = new Thickness(0, 6, 0, 8) }; var save = new Button { Content = "Save Settings", IsDefault = true, Width = 130, HorizontalAlignment = HorizontalAlignment.Right };
+        var panel = new StackPanel { Margin = new Thickness(22) }; panel.Children.Add(new TextBlock { Text = "Default export folder", Foreground = Brushes.LightGray }); panel.Children.Add(folder); panel.Children.Add(copy); panel.Children.Add(updates); panel.Children.Add(new TextBlock { Text = "Updates come from the official Post GitHub Releases page.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 10) }); panel.Children.Add(new TextBlock { Text = "Explorer menu: Quick Edit with Post is registered for all supported formats.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap }); panel.Children.Add(copyOnImport); panel.Children.Add(copyFolderHint); panel.Children.Add(save);
+        var window = new Window { Title = "Post Settings", Width = 520, Height = 400, Content = panel, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize }; save.Click += (_, _) => { _settings = _settings with { DefaultOutputFolder = folder.Text, AutoCopyExports = copy.IsChecked == true, CheckForUpdates = updates.IsChecked == true, PreviewVolume = PreviewVolume.Value, CopyMediaOnImport = copyOnImport.IsChecked == true, MediaCopyFolder = copyFolder }; _settings.Save(); window.DialogResult = true; }; window.ShowDialog();
     }
 
     private async void Update_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Checking for updates…", async token => { var service = new UpdateService(); var update = await service.CheckAsync(UpdateService.UpdateEndpoint, token); if (update is null) { MessageBox.Show(this, "You already have the latest release.", "Post Updater"); return; } if (MessageBox.Show(this, $"{update.Name} is available. Download and install it now?", "Post Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return; var path = await service.DownloadAsync(update, new Progress<double>(p => BusyProgress.Value = p), token); UpdateService.LaunchInstaller(path); Application.Current.Shutdown(); });
+        // An installed Post and a portable one are updated differently, and running the
+        // installer over a portable folder quietly installs a second Post elsewhere while
+        // leaving the one in use untouched.
+        var kind = InstallKind.Current;
+
+        await RunBusyAsync("Checking for updates…", async token =>
+        {
+            var service = new UpdateService();
+            UpdateInfo? update;
+            try { update = await service.CheckAsync(UpdateService.ReleasesEndpoint, kind, token); }
+            catch when (kind == PostInstallKind.Installed)
+            {
+                // The releases list can refuse; the download endpoint still serves installers.
+                update = await service.CheckAsync(UpdateService.UpdateEndpoint, kind, token);
+            }
+
+            if (update is null)
+            {
+                MessageBox.Show(this, "You already have the latest release.", "Post Updater");
+                return;
+            }
+
+            if (kind == PostInstallKind.Portable && !PortableUpdater.CanReplaceAppFolder(out var reason))
+            {
+                MessageBox.Show(this,
+                    $"{update.Name} is available, but this copy of Post cannot replace itself.{Environment.NewLine}{Environment.NewLine}{reason}{Environment.NewLine}{Environment.NewLine}Download it from {update.WebUrl} and unpack it yourself.",
+                    "Post Updater", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var question = kind == PostInstallKind.Installed
+                ? $"{update.Name} is available. Download and install it now?"
+                : $"{update.Name} is available. Post will close, replace its own folder and start again.{Environment.NewLine}{Environment.NewLine}Your settings, plugins and LUTs are kept elsewhere and are not touched.";
+            if (MessageBox.Show(this, question, "Post Updater", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+
+            var path = await service.DownloadAsync(update, new Progress<double>(value => BusyProgress.Value = value), token);
+
+            if (kind == PostInstallKind.Installed) UpdateService.LaunchInstaller(path);
+            else PortableUpdater.Launch(path, update.Name);
+
+            Application.Current.Shutdown();
+        });
     }
 }
-

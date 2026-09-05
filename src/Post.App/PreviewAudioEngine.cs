@@ -1,4 +1,4 @@
-using NAudio.Wave;
+﻿using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Post.Core;
 
@@ -107,13 +107,14 @@ internal sealed class PreviewAudioEngine : IDisposable
         foreach (var id in stale) Remove(id);
     }
 
-    public void SetGain(Guid id, double volume, bool muteLeft, bool muteRight)
+    public void SetGain(Guid id, double volume, bool muteLeft, bool muteRight, AudioChannelSource channel = AudioChannelSource.Both)
     {
         lock (_gate)
         {
             if (!_sources.TryGetValue(id, out var source)) return;
             source.Gain.Volume = (float)Math.Clamp(volume, 0, 4);
             source.Gain.LeftMuted = muteLeft; source.Gain.RightMuted = muteRight;
+            source.Gain.Channel = channel;
         }
     }
 
@@ -163,6 +164,7 @@ internal sealed class PreviewAudioEngine : IDisposable
         public float Volume { get; set; } = 1;
         public bool LeftMuted { get; set; }
         public bool RightMuted { get; set; }
+        public AudioChannelSource Channel { get; set; } = AudioChannelSource.Both;
         public bool Running { get; set; }
 
         public int Read(float[] buffer, int offset, int count)
@@ -171,6 +173,16 @@ internal sealed class PreviewAudioEngine : IDisposable
             if (!Running) { Array.Clear(buffer, offset, count); return count; }
             var read = source.Read(buffer, offset, count);
             for (var i = read; i < count; i++) buffer[offset + i] = 0;
+            // One channel played in both ears, when the layer is a split half.
+            if (Channel != AudioChannelSource.Both && WaveFormat.Channels == 2)
+            {
+                var wanted = Channel == AudioChannelSource.Left ? 0 : 1;
+                for (var i = 0; i + 1 < count; i += 2)
+                {
+                    var sample = buffer[offset + i + wanted];
+                    buffer[offset + i] = sample; buffer[offset + i + 1] = sample;
+                }
+            }
             for (var i = 0; i < count; i++)
             {
                 var channel = (offset + i) % WaveFormat.Channels;

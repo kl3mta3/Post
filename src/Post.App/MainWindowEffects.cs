@@ -33,7 +33,21 @@ public partial class MainWindow
     private void SetPreviewEffect(VideoEffect? pending, Guid? suppressed)
     {
         _pendingPreviewEffect = pending; _suppressedPreviewEffectId = suppressed;
+        RefreshLivePreviewShaders();
+        UpdatePreviewShaders();
         if (!_playing) _ = RenderCurrentScrubFrameAsync();
+    }
+
+    /// <summary>
+    /// Re-shades whichever players are on screen, so an effect being auditioned shows on
+    /// the moving picture rather than only on a paused frame.
+    /// </summary>
+    private void RefreshLivePreviewShaders()
+    {
+        foreach (var layer in _composition.Layers)
+            foreach (var placement in layer.Placements)
+                if (_livePlayers.TryGetValue(placement.Id, out var player))
+                    ApplyPreviewShader(player, placement.Id, PreviewEffectsFor(placement));
     }
 
     // ---- live effect preview ------------------------------------------------
@@ -65,8 +79,12 @@ public partial class MainWindow
         if (_compositionPreviewActive) { Player.Effect = null; return; }
         var effects = new List<VideoEffect>();
         if (_current is { } clip && _composition.Layers.SelectMany(layer => layer.Placements).FirstOrDefault(item => ReferenceEquals(item.Clip, clip)) is { } placement)
-            effects.AddRange(placement.Effects);
-        effects.AddRange(_composition.OutputEffects);
+            effects.AddRange(PreviewEffectsFor(placement));
+        else
+        {
+            effects.AddRange(_composition.OutputEffects.Where(effect => effect.Id != _suppressedPreviewEffectId));
+            if (_pendingPreviewEffect is { } pending) effects.Add(pending);
+        }
         ApplyPreviewShader(Player, Guid.Empty, effects);
     }
 
@@ -246,27 +264,16 @@ public partial class MainWindow
         if (LookStyles.Find(name) is not { } style) return;
         try
         {
-            var path = LookStyles.EnsureCube(style, LutFolder);
+            var path = LookStyles.EnsureCube(style, LutLibrary.Folder);
             AddVideoEffect(new VideoEffect { Kind = VideoEffectKind.Lut, FilePath = path }, wholeTimeline);
         }
         catch (Exception exception) { MessageBox.Show(this, exception.Message, "Styles", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
-    /// <summary>Generated LUTs outlive the session, so they sit next to the settings.</summary>
-    private static string LutFolder
-    {
-        get
-        {
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Post", "luts");
-            Directory.CreateDirectory(folder);
-            return folder;
-        }
-    }
-
     private void AddGradeAsLut(ColorGrade grade, bool wholeTimeline)
     {
         // The LUT outlives the session, so it goes next to the settings rather than in the cache.
-        var path = Path.Combine(LutFolder, $"grade-{DateTime.Now:yyyyMMdd_HHmmss}.cube");
+        var path = Path.Combine(LutLibrary.Folder, $"grade-{DateTime.Now:yyyyMMdd_HHmmss}.cube");
         try { grade.SaveCube(path, "Post grade"); }
         catch (Exception exception) { MessageBox.Show(this, exception.Message, "Color Grading", MessageBoxButton.OK, MessageBoxImage.Error); return; }
         AddVideoEffect(new VideoEffect { Kind = VideoEffectKind.Lut, FilePath = path }, wholeTimeline);
@@ -379,7 +386,8 @@ public partial class MainWindow
             var volume = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Volume, time - placement.Start, 1);
             engine.SetGain(placement.Id, _muted || item.Layer.IsMuted ? 0 : volume,
                 item.Layer.Kind == TimelineLayerKind.Audio && item.Layer.MuteLeftChannel,
-                item.Layer.Kind == TimelineLayerKind.Audio && item.Layer.MuteRightChannel);
+                item.Layer.Kind == TimelineLayerKind.Audio && item.Layer.MuteRightChannel,
+                item.Layer.ChannelSource);
             engine.SyncPosition(placement.Id, item.SourcePosition.SourceTime, _playing ? TimeSpan.FromMilliseconds(220) : TimeSpan.FromMilliseconds(20));
         }
         engine.SetMasterVolume(PreviewVolume.Value, _muted);
@@ -402,7 +410,10 @@ public partial class MainWindow
     /// equalizer is actually doing something, so an unused equalizer leaves the normal
     /// WPF playback path exactly as it was.
     /// </summary>
-    private bool PreviewAudioEngaged => PreviewAudioActive && !_composition.Equalizer.IsFlat;
+    // The engine is what can actually play one channel centred, so a split layer engages
+    // it as surely as an equalizer setting does.
+    private bool PreviewAudioEngaged => PreviewAudioActive
+        && (!_composition.Equalizer.IsFlat || _composition.Layers.Any(layer => layer.ChannelSource != AudioChannelSource.Both));
 
     /// <summary>Opens the output device once; the engine then lives as long as the window.</summary>
     private void EnsurePreviewAudio()
@@ -461,7 +472,8 @@ public partial class MainWindow
         var muted = _muted || layer.IsMuted;
         engine.SetGain(placement.Id, muted ? 0 : Math.Clamp(animatedVolume, 0, 4),
             layer.Kind == TimelineLayerKind.Audio && layer.MuteLeftChannel,
-            layer.Kind == TimelineLayerKind.Audio && layer.MuteRightChannel);
+            layer.Kind == TimelineLayerKind.Audio && layer.MuteRightChannel,
+            layer.ChannelSource);
         // Seek hard while paused or scrubbing; while playing, only correct real drift.
         engine.SyncPosition(placement.Id, sourceTime, playing ? TimeSpan.FromMilliseconds(220) : TimeSpan.FromMilliseconds(20));
     }

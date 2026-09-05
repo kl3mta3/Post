@@ -1,4 +1,4 @@
-namespace Post.Core;
+﻿namespace Post.Core;
 
 /// <summary>One of the ready-made looks offered in the effects browser.</summary>
 public sealed record LookStyle(string Name, string Description, ColorGrade Grade);
@@ -38,9 +38,22 @@ public static class LookStyles
     /// </summary>
     public static string EnsureCube(LookStyle style, string folder, int size = 33)
     {
-        var safe = string.Concat(style.Name.Select(character => char.IsLetterOrDigit(character) ? character : '-'));
-        var path = Path.Combine(folder, $"style-{safe}-{size}.cube");
+        var path = CubePath(style, folder, size);
         if (!File.Exists(path)) style.Grade.SaveCube(path, style.Name, size);
         return path;
+    }
+
+    /// <summary>Where a style's generated LUT lives, whether or not it exists yet.</summary>
+    public static string CubePath(LookStyle style, string folder, int size = 33)
+    {
+        var safe = string.Concat(style.Name.Select(character => char.IsLetterOrDigit(character) ? character : '-'));
+        return Path.Combine(folder, $"style-{safe}-{size}.cube");
+    }
+
+    /// <summary>The style a generated file belongs to, or null when it is someone's own LUT.</summary>
+    public static LookStyle? StyleForFile(string path)
+    {
+        var name = Path.GetFileName(path);
+        return All.FirstOrDefault(style => Path.GetFileName(CubePath(style, "")).Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 }

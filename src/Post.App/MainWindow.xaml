@@ -119,6 +119,7 @@
                         <Separator/>
                         <MenuItem Header="Save" InputGestureText="Ctrl+S" Click="SaveProject_Click"/>
                         <MenuItem Header="Save As…" InputGestureText="Ctrl+Shift+S" Click="SaveProjectAs_Click"/>
+                        <MenuItem Header="Package Project…" Click="PackageProject_Click" ToolTip="Copy every file this project uses into a folder beside it, so the whole thing can be moved or handed on"/>
                         <Separator/>
                         <MenuItem Header="Export Video…" InputGestureText="Enter" Click="Export_Click"/>
                         <MenuItem Header="Export Audio…" Click="ExportAudio_Click"/>
@@ -143,6 +144,7 @@
                         <MenuItem Header="Delete" InputGestureText="Delete" Click="Delete_Click"/>
                         <Separator/>
                         <MenuItem Header="Split Clip" InputGestureText="C" Click="SplitPlacement_Click"/>
+                        <MenuItem Header="Screenshot" InputGestureText="P" Click="Snapshot_Click"/>
                     </MenuItem>
                     <MenuItem Header="View" RenderTransformOrigin="0.5,0.5">
                         <MenuItem.RenderTransform>
@@ -166,20 +168,20 @@
                         <MenuItem Header="Show / Hide Panels">
                             <MenuItem Header="Media panel" IsCheckable="True" IsChecked="True" Click="ToggleMediaPanel_Click"/>
                             <MenuItem Header="Layers panel" IsCheckable="True" IsChecked="True" Click="ToggleLayersPanel_Click"/>
+                            <Separator/>
+                            <MenuItem x:Name="EffectsWindowMenuItem" Header="Effects" InputGestureText="Ctrl+E" IsCheckable="True" Click="ToggleEffectsWindow_Click"/>
+                            <MenuItem x:Name="EqualizerWindowMenuItem" Header="Audio EQ" InputGestureText="Ctrl+Q" IsCheckable="True" Click="ToggleEqualizerWindow_Click"/>
                         </MenuItem>
                         <MenuItem Header="Reset Panel Layout" Click="ResetLayout_Click"/>
                     </MenuItem>
-                    <MenuItem Header="Tools">
-                        <MenuItem Header="Screenshot" InputGestureText="P" Click="Snapshot_Click"/>
-                        <Separator/>
+                    <MenuItem x:Name="ToolsMenu" Header="Tools">
                         <MenuItem Header="Windows">
                             <MenuItem x:Name="KeyframesWindowMenuItem" Header="Keyframe Timeline" IsCheckable="True" Click="ToggleKeyframesWindow_Click"/>
-                            <MenuItem x:Name="EffectsWindowMenuItem" Header="Effects" InputGestureText="Ctrl+E" IsCheckable="True" Click="ToggleEffectsWindow_Click"/>
-                            <Separator/>
                             <MenuItem x:Name="ColorGradingWindowMenuItem" Header="Color Grading" IsCheckable="True" Click="ToggleColorGradingWindow_Click"/>
-                            <MenuItem x:Name="EqualizerWindowMenuItem" Header="Audio EQ" InputGestureText="Ctrl+Q" IsCheckable="True" Click="ToggleEqualizerWindow_Click"/>
                             <MenuItem x:Name="AnimationsWindowMenuItem" Header="Animations" IsCheckable="True" Click="ToggleAnimationsWindow_Click"/>
                         </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Plugin Manager…" Click="PluginManager_Click"/>
                         <Separator/>
                         <MenuItem Header="Export Settings…" Click="ExportSettings_Click"/>
                         <MenuItem Header="Settings…" InputGestureText="Ctrl+," Click="Settings_Click"/>
@@ -256,9 +258,13 @@
                             <xcad:LayoutAnchorable Title="Preview" ContentId="preview" CanClose="False" CanHide="False" CanAutoHide="False">
                                 <DockPanel>
                                     <Border DockPanel.Dock="Top" Background="#0A1326" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-                                        <StackPanel Orientation="Horizontal" Margin="8,5,0,5">
-                                            <TextBlock Text="▯ FORMAT:" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,8,0"/>
-                                            <ComboBox x:Name="AspectCombo" Width="190" SelectedIndex="0" SelectionChanged="AspectCombo_SelectionChanged">
+                                        <Grid Margin="8,5,8,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" MinWidth="64" MaxWidth="150"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="AspectCombo" HorizontalAlignment="Stretch" VerticalAlignment="Center" SelectedIndex="0" ToolTip="Output shape of the finished video" SelectionChanged="AspectCombo_SelectionChanged">
                                                 <ComboBoxItem Content="Original source" Tag="Original"/>
                                                 <ComboBoxItem Content="16:9 Landscape" Tag="Landscape16x9"/>
                                                 <ComboBoxItem Content="9:16 Vertical / Shorts" Tag="Vertical9x16"/>
@@ -267,13 +273,15 @@
                                                 <ComboBoxItem Content="4:3 Standard" Tag="Standard4x3"/>
                                                 <ComboBoxItem Content="21:9 Cinema" Tag="Cinema21x9"/>
                                             </ComboBox>
-                                            <TextBlock Text=" Zoom/Crop" Foreground="{StaticResource MutedBrush}"/>
-                                            <Slider x:Name="CropZoom" Width="110" Minimum="1" Maximum="3" Value="1" TickFrequency=".1" ValueChanged="Crop_ValueChanged"/>
-                                            <TextBlock Text="Pan X" Foreground="{StaticResource MutedBrush}"/>
-                                            <Slider x:Name="PanX" Width="75" Minimum="-1" Maximum="1" ValueChanged="Crop_ValueChanged"/>
-                                            <TextBlock Text="Y" Foreground="{StaticResource MutedBrush}"/>
-                                            <Slider x:Name="PanY" Width="75" Minimum="-1" Maximum="1" ValueChanged="Crop_ValueChanged"/>
-                                        </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Zoom/Crop" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                <Slider x:Name="CropZoom" Width="110" Minimum="1" Maximum="3" Value="1" TickFrequency=".1" VerticalAlignment="Center" ValueChanged="Crop_ValueChanged"/>
+                                                <TextBlock Text="Pan X" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                <Slider x:Name="PanX" Width="75" Minimum="-1" Maximum="1" VerticalAlignment="Center" ValueChanged="Crop_ValueChanged"/>
+                                                <TextBlock Text="Y" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                <Slider x:Name="PanY" Width="75" Minimum="-1" Maximum="1" VerticalAlignment="Center" ValueChanged="Crop_ValueChanged"/>
+                                            </StackPanel>
+                                        </Grid>
                                     </Border>
                                     <Border CornerRadius="7" BorderBrush="#20314C" BorderThickness="1" Background="#030711" ClipToBounds="True">
                                         <Grid>
@@ -286,7 +294,8 @@
                                                 <Grid x:Name="LivePlayerHost" Background="Black" Visibility="Collapsed"/>
                                                 <MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Manual" Stretch="Uniform" MediaOpened="Player_MediaOpened" MediaEnded="Player_MediaEnded"/>
                                                 <Grid x:Name="DropPanel" Background="#050918">
-                                                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="540">
+                                                <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="16">
+                                                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="540" Margin="16,0,16,0">
                                                         <Border Width="72" Height="72" CornerRadius="16" BorderBrush="#20405C" BorderThickness="1" Background="#101C31" HorizontalAlignment="Center">
                                                             <TextBlock Text="▦" FontSize="36" Foreground="{StaticResource BlueBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Border>
@@ -294,6 +303,7 @@
                                                         <TextBlock Text="Drag video, audio, or image files here, then place them on Layers." TextWrapping="Wrap" TextAlignment="Center" Foreground="{StaticResource MutedBrush}"/>
                                                         <Button Content="Browse Media Files" Style="{StaticResource AccentButton}" Width="190" Margin="0,16,0,0" Click="Open_Click"/>
                                                     </StackPanel>
+                                                    </Viewbox>
                                                 </Grid>
                                             </Grid>
                                             <Border Grid.Row="1" BorderBrush="#2F5972" BorderThickness="0,1" Background="#0B2535" ClipToBounds="True" ToolTip="Project seek bar — clips are edited only on Layers">
@@ -309,7 +319,8 @@
                                                 </ScrollViewer>
                                             </Border>
                                             <Border Grid.Row="2" Background="#0D1729" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="7">
-                                                <Grid>
+                                                <Viewbox Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Stretch">
+                                                <Grid Width="1100">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" MinWidth="110"/>
                                                         <ColumnDefinition Width="*"/>
@@ -334,6 +345,7 @@
                                                         <Button x:Name="LoopButton" Content="↻ Loop" Click="Loop_Click"/>
                                                     </StackPanel>
                                                 </Grid>
+                                                </Viewbox>
                                             </Border>
                                         </Grid>
                                     </Border>

@@ -1,4 +1,4 @@
-using Post.Core;
+﻿using Post.Core;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -11,7 +11,7 @@ internal sealed class EffectEditorWindow : Window
     private readonly EffectParameterPanel _panel;
     private readonly VideoEffect _effect;
     private readonly Action<VideoEffect?, Guid?> _setPreview;
-    private readonly CheckBox _preview = new() { Content = "Preview on the paused frame", Foreground = Brushes.White, Margin = new Thickness(0, 4, 0, 12) };
+    private readonly CheckBox _preview = new() { Content = "Preview (live or paused)", ToolTip = "Show this effect on the picture while you edit it. Nothing is saved until you apply it.", Foreground = Brushes.White, Margin = new Thickness(0, 4, 0, 12) };
 
     public EffectEditorWindow(VideoEffect effect, Action<VideoEffect?, Guid?> setPreview, Window owner)
     {

@@ -40,9 +40,8 @@ internal sealed class EffectsPanel : Grid
         new("Blur and Sharpen", "Blur", "Soften the picture with a gaussian blur.", Effect: VideoEffectKind.Blur),
         new("Blur and Sharpen", "Sharpen", "Add local contrast to bring out detail.", Effect: VideoEffectKind.Sharpen),
         new("Color and Image correction", "Color Correction", "Adjust brightness, contrast, saturation, gamma and hue.", Effect: VideoEffectKind.ColorCorrection),
-        new("Color and Image correction", "LUT (.cube)", "Apply a 3D colour lookup table for a graded look.", Effect: VideoEffectKind.Lut),
+        new("Color and Image correction", "LUT and Looks", "Apply a ready-made look or any 3D colour lookup table. Both arrive as an ordinary LUT you can tweak in the Color Grading window.", Effect: VideoEffectKind.Lut),
         new("Stylize", "Vignette", "Darken the edges of the frame towards the corners.", Effect: VideoEffectKind.Vignette),
-        .. LookStyles.All.Select(style => new Preset("Presets", style.Name, style.Description + " Applies as a LUT you can tweak in the Color Grading window.", Style: style.Name)),
     ];
 
     private readonly EffectHost _host;
@@ -52,20 +51,20 @@ internal sealed class EffectsPanel : Grid
     private readonly StackPanel _options = new();
     private readonly StackPanel _applied = new();
     private readonly TextBlock _target = new() { Foreground = Brushes.LightGray, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
-    private readonly CheckBox _wholeTimeline = new() { Content = "Apply to the whole timeline instead of the selected clip", Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, 12) };
+    private readonly CheckBox _wholeTimeline = new() { Content = "Apply to whole Timeline", ToolTip = "Apply to every layer of the finished picture rather than the selected clip.", Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, 12) };
     private TextBox _duration = new();
     private TextBox _from = new();
     private TextBox _to = new();
     private EffectParameterPanel? _parameters;
-    private readonly CheckBox _preview = new() { Content = "Preview on the paused frame (nothing is saved until you add it)", Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, 10) };
+    private readonly CheckBox _preview = new() { Content = "Preview (live or paused)", ToolTip = "Show this effect on the picture while you choose it, playing or paused. Nothing is saved until you add it.", Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, 10) };
     private readonly Button _applyButton = new() { Content = "Apply to selected item", Padding = new Thickness(12, 7, 12, 7), IsEnabled = false };
 
     public EffectsPanel(EffectHost host)
     {
-        _host = host; MinWidth = 460;
+        _host = host; MinWidth = 330;
         Background = new SolidColorBrush(Color.FromRgb(8, 19, 38));
         TextElement.SetForeground(this, Brushes.White);
-        var root = new Grid { Margin = new Thickness(12) }; root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) }); root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) }); root.ColumnDefinitions.Add(new ColumnDefinition());
+        var root = new Grid { Margin = new Thickness(12) }; root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210), MinWidth = 150 }); root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) }); root.ColumnDefinitions.Add(new ColumnDefinition());
         var browser = new DockPanel(); var heading = new TextBlock { Text = "EFFECTS", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(142, 201, 236)), Margin = new Thickness(4, 2, 0, 8) }; DockPanel.SetDock(heading, Dock.Top); browser.Children.Add(heading); browser.Children.Add(_tree);
         var border = new Border { BorderBrush = new SolidColorBrush(Color.FromRgb(48, 72, 99)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(4), Child = browser }; root.Children.Add(border);
 

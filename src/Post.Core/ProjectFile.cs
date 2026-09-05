@@ -3,15 +3,19 @@
 namespace Post.Core;
 
 public sealed record PostProjectDocument(int Version, string Name, double WorkspaceSeconds, bool RenderWorkspaceTailAsBlack, ProjectClipDocument[] Clips, ProjectLayerDocument[] Layers,
-    ProjectEffectDocument[]? OutputEffects = null, ProjectEqualizerDocument? Equalizer = null);
+    ProjectEffectDocument[]? OutputEffects = null, ProjectEqualizerDocument? Equalizer = null,
+    string[]? Animations = null);
 public sealed record ProjectEqualizerDocument(bool IsEnabled, double GainDb, ProjectEqualizerBandDocument[] Bands);
 public sealed record ProjectEqualizerBandDocument(double FrequencyHz, double GainDb, double Width);
-public sealed record ProjectClipDocument(string SourcePath, ProjectSegmentDocument[] Segments);
+public sealed record ProjectClipDocument(string SourcePath, ProjectSegmentDocument[] Segments,
+    // Where the file sits relative to the project, so moving the two together still works.
+    string? RelativePath = null, double DurationSeconds = 0, int Width = 0, int Height = 0,
+    double FrameRate = 0, string? VideoCodec = null, string? AudioCodec = null);
 public sealed record ProjectSegmentDocument(double StartSeconds, double EndSeconds);
 public sealed record ProjectLayerDocument(string Name, bool IsVisible, bool IsMuted, ProjectPlacementDocument[] Placements,
     TimelineLayerKind Kind = TimelineLayerKind.Video, ProjectGraphicsDocument[]? Graphics = null,
     bool MuteLeftChannel = false, bool MuteRightChannel = false, double Volume = 1,
-    double AnchorX = .5, double AnchorY = .5);
+    double AnchorX = .5, double AnchorY = .5, AudioChannelSource ChannelSource = AudioChannelSource.Both);
 public sealed record ProjectPlacementDocument(int ClipIndex, double StartSeconds, double InSeconds = 0, double? DurationSeconds = null,
     ProjectKeyframeDocument[]? Keyframes = null, ProjectEffectDocument[]? Effects = null,
     double SpinDegreesPerSecond = 0);

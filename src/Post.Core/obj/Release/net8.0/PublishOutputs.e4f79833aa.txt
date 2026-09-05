@@ -1,3 +1,0 @@
-C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\bin\Release\net8.0\publish\Post.Core.dll
-C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\bin\Release\net8.0\publish\Post.Core.deps.json
-C:\Users\Kenny\source\GPT\FreeClipEdit\src\Post.Core\bin\Release\net8.0\publish\Post.Core.pdb

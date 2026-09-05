@@ -35,4 +35,8 @@ test/
 /test-assets/
 /dist/
 /installer/
+/tools/
+/plugins/
 **/bin/
+**/obj/
+/Post.Plugins/
