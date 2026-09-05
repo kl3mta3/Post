@@ -15,10 +15,11 @@ public sealed record ProjectSegmentDocument(double StartSeconds, double EndSecon
 public sealed record ProjectLayerDocument(string Name, bool IsVisible, bool IsMuted, ProjectPlacementDocument[] Placements,
     TimelineLayerKind Kind = TimelineLayerKind.Video, ProjectGraphicsDocument[]? Graphics = null,
     bool MuteLeftChannel = false, bool MuteRightChannel = false, double Volume = 1,
-    double AnchorX = .5, double AnchorY = .5, AudioChannelSource ChannelSource = AudioChannelSource.Both);
+    double AnchorX = .5, double AnchorY = .5, AudioChannelSource ChannelSource = AudioChannelSource.Both,
+    ProjectTransitionDocument[]? Transitions = null);
 public sealed record ProjectPlacementDocument(int ClipIndex, double StartSeconds, double InSeconds = 0, double? DurationSeconds = null,
     ProjectKeyframeDocument[]? Keyframes = null, ProjectEffectDocument[]? Effects = null,
-    double SpinDegreesPerSecond = 0);
+    double SpinDegreesPerSecond = 0, bool AudioMuted = false);
 public sealed record ProjectEffectDocument(VideoEffectKind Kind, bool IsEnabled = true, double Amount = .5,
     double Brightness = 0, double Contrast = 1, double Saturation = 1, double Gamma = 1, double Hue = 0, string? FilePath = null);
 public sealed record ProjectGraphicsDocument(GraphicsOverlayKind Kind, string Text, string? ImagePath, string FontFamily,
@@ -26,9 +27,11 @@ public sealed record ProjectGraphicsDocument(GraphicsOverlayKind Kind, string Te
     double X, double Y, double Width, double Height, double StartSeconds, double DurationSeconds,
     ProjectKeyframeDocument[]? Keyframes = null, string FillColor1 = "#FFFFFFFF", string FillColor2 = "#FF000000",
     bool UseSecondFillColor = true, GraphicGradientKind GradientKind = GraphicGradientKind.Linear, double GradientAngle = 0,
-    double SpinDegreesPerSecond = 0);
+    double SpinDegreesPerSecond = 0, bool AudioMuted = false, double CornerRadius = 0);
+public sealed record ProjectTransitionDocument(TransitionKind Kind, double CutSeconds, double DurationSeconds,
+    TransitionAlignment Alignment = TransitionAlignment.CenterAtCut);
 public sealed record ProjectKeyframeDocument(KeyframeProperty Property, double OffsetSeconds, double Value,
-    KeyframeInterpolation Interpolation = KeyframeInterpolation.Linear);
+    KeyframeInterpolation Interpolation = KeyframeInterpolation.Linear, string? Text = null);
 
 public static class PostProjectStore
 {

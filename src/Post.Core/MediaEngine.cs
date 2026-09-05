@@ -25,6 +25,10 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
     private static string S(double value) => value.ToString("0.######", CultureInfo.InvariantCulture);
     private static string Ts(TimeSpan value) => S(value.TotalSeconds);
 
+    /// <summary>No more than the media actually has, and never negative.</summary>
+    private static TimeSpan Cap(TimeSpan wanted, TimeSpan available) =>
+        wanted <= TimeSpan.Zero ? TimeSpan.Zero : wanted < available ? wanted : available;
+
     /// <summary>
     /// Runs ffmpeg while translating its own -progress stream into a fraction inside
     /// from..to. Without a known total duration this behaves like a plain run.
@@ -226,7 +230,7 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
 
     public async Task ExportCompositionAudioAsync(TimelineComposition composition, string output, ExportOptions options, IProgress<ExportProgress>? progress = null, CancellationToken token = default)
     {
-        var placements = composition.Layers.Where(layer => layer.IsVisible && !LayerAudioFullyMuted(layer)).SelectMany(layer => layer.Placements.Select(placement => (Layer: layer, Placement: placement))).Where(item => item.Placement.Clip.Media.HasAudio).ToArray();
+        var placements = composition.Layers.Where(layer => layer.IsVisible && !LayerAudioFullyMuted(layer)).SelectMany(layer => layer.Placements.Select(placement => (Layer: layer, Placement: placement))).Where(item => item.Placement.Clip.Media.HasAudio && !item.Placement.AudioMuted).ToArray();
         if (placements.Length == 0) throw new InvalidOperationException("No visible, unmuted timeline layers contain audio.");
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         var temp = Path.Combine(Path.GetTempPath(), $"post-audio-{Guid.NewGuid():N}"); Directory.CreateDirectory(temp);
@@ -333,7 +337,22 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
             {
                 var placement = visual.Item.Placement; var input = visual.InputIndex;
                 var source = $"v{input}";
-                filters.Add($"[{input}:v]trim=start={Ts(placement.InPoint)}:end={Ts(placement.InPoint + placement.Duration)},setpts=PTS-STARTPTS+{Ts(placement.Start)}/TB,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[vp{input}]");
+                // A transition either side of this clip means showing frames it does not
+                // normally use: the outgoing clip carries on past its out-point, and the
+                // incoming one starts before its in-point. The trim is widened to let those
+                // through, and the picture is shifted back by however early it now starts.
+                var layerTransitions = visual.Item.Layer.Transitions;
+                var endsInto = layerTransitions.FirstOrDefault(item => (item.Cut - placement.End).Duration() <= Post.Core.Transitions.Tolerance);
+                var startsFrom = layerTransitions.FirstOrDefault(item => (item.Cut - placement.Start).Duration() <= Post.Core.Transitions.Tolerance);
+
+                var reachAfter = endsInto is null ? TimeSpan.Zero : TransitionFilters.Reach(endsInto).Outgoing;
+                var reachBefore = startsFrom is null ? TimeSpan.Zero : TransitionFilters.Reach(startsFrom).Incoming;
+
+                // Never past what the media actually holds.
+                reachAfter = Cap(reachAfter, Post.Core.Transitions.HandleAfter(placement));
+                reachBefore = Cap(reachBefore, Post.Core.Transitions.HandleBefore(placement));
+
+                filters.Add($"[{input}:v]trim=start={Ts(placement.InPoint - reachBefore)}:end={Ts(placement.InPoint + placement.Duration + reachAfter)},setpts=PTS-STARTPTS+{Ts(placement.Start - reachBefore)}/TB,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[vp{input}]");
                 // Animated clips are resized by scale and then placed by the overlay filter.
                 // Both accept per-frame expressions, which is what reproduces the editor's
                 // transform: scaled about the centre, then offset by (position - 0.5).
@@ -342,11 +361,29 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
                 var turns = Rotation.Turns(placement.Keyframes, placement.SpinDegreesPerSecond);
                 var moves = turns || placement.Keyframes.Any(item => item.Property is KeyframeProperty.PositionX or KeyframeProperty.PositionY or KeyframeProperty.Scale);
                 var fades = placement.Keyframes.Any(item => item.Property is KeyframeProperty.Opacity);
+                // The transition itself: the incoming clip is revealed over the outgoing one
+                // by an alpha that depends on where the pixel is and how far through we are.
+                // Fades are the ones that need the outgoing clip driven too, because they go
+                // through black rather than through each other.
+                var transitionFilters = new List<string>();
+                if (startsFrom is not null)
+                    transitionFilters.Add(TransitionFilters.AlphaFilter(TransitionFilters.IncomingAlpha(startsFrom), startsFrom));
+                if (endsInto is not null && TransitionFilters.OutgoingAlpha(endsInto) is { } outgoing)
+                    transitionFilters.Add(TransitionFilters.AlphaFilter(outgoing, endsInto));
+
+                // A transition needs alpha, so the chain has to carry it even when nothing
+                // else about this clip is animated.
+                var blends = transitionFilters.Count > 0;
+
                 var clipEffects = VideoEffects.Build(placement.Effects);
-                if (moves || fades)
+                // A LUT that changes partway through the clip. Each stretch is its own
+                // lut3d, switched on for its own window, so no cutting is needed.
+                clipEffects.AddRange(VideoEffects.BuildLutKeyframes(placement.Keyframes, placement.Duration, placement.Start.TotalSeconds));
+                if (moves || fades || blends)
                 {
                     var offsetSeconds = placement.Start.TotalSeconds;
                     var chain = new List<string>(clipEffects) { "fps=30", "format=rgba" };
+                    chain.AddRange(transitionFilters);
                     if (moves)
                     {
                         var scale = KeyframeEvaluator.BuildFfmpegExpression(placement.Keyframes, KeyframeProperty.Scale, 1, "t", offsetSeconds);
@@ -383,7 +420,28 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
             for (var i = 0; i < visualPlacements.Length; i++)
             {
                 var visual = visualPlacements[i]; var input = visual.InputIndex; var next = $"overlay{i}";
-                var position = placementPositions.TryGetValue(input, out var value) ? $"x='{value.X}':y='{value.Y}':eval=frame" : "0:0";
+
+                // A push slides the picture sideways: the incoming clip in from one edge, the
+                // outgoing one out of the other. It is a move rather than a reveal, so it
+                // lands here on the overlay's position instead of on any alpha.
+                var pushes = new List<string>();
+                foreach (var transition in visual.Item.Layer.Transitions)
+                {
+                    if ((transition.Cut - visual.Item.Placement.Start).Duration() <= Post.Core.Transitions.Tolerance
+                        && TransitionFilters.PushOffset(transition) is { } arriving) pushes.Add(arriving);
+                    if ((transition.Cut - visual.Item.Placement.End).Duration() <= Post.Core.Transitions.Tolerance
+                        && TransitionFilters.OutgoingPushOffset(transition) is { } leaving) pushes.Add(leaving);
+                }
+
+                var slide = pushes.Count == 0 ? null : $"({string.Join('+', pushes)})*W";
+                var placed = placementPositions.TryGetValue(input, out var value)
+                    ? value
+                    : (X: "0", Y: "0");
+                if (slide is not null) placed = ($"({placed.X})+{slide}", placed.Y);
+
+                var position = placementPositions.ContainsKey(input) || slide is not null
+                    ? $"x='{placed.X}':y='{placed.Y}':eval=frame"
+                    : "0:0";
                 filters.Add($"[{video}][v{input}]overlay={position}:eof_action=pass:shortest=0[{next}]"); video = next;
             }
             for (var i = 0; i < graphics.Length; i++)
@@ -438,10 +496,24 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
             for (var i = 0; i < placements.Length; i++)
             {
                 var item = placements[i];
-                if (LayerAudioFullyMuted(item.Layer) || !item.Placement.Clip.Media.HasAudio) continue;
-                var name = $"a{i}"; var delay = Math.Max(0, (long)item.Placement.Start.TotalMilliseconds);
+                if (LayerAudioFullyMuted(item.Layer) || !item.Placement.Clip.Media.HasAudio || item.Placement.AudioMuted) continue;
+                // Sound cross-fades with the picture. The stream is widened into the same
+                // handles the video uses, starts as much earlier, and is ramped by the
+                // transition — a hard cut under a dissolve is the thing everybody hears.
+                var (audioBefore, audioAfter) = Post.Core.Transitions.ReachFor(item.Layer, item.Placement);
+                var streamStart = item.Placement.Start - audioBefore;
+
+                var name = $"a{i}"; var delay = Math.Max(0, (long)streamStart.TotalMilliseconds);
                 var volume = KeyframeEvaluator.BuildFfmpegExpression(item.Placement.Keyframes, KeyframeProperty.Volume, 1);
-                filters.Add($"[{i}:a]atrim=start={Ts(item.Placement.InPoint)}:end={Ts(item.Placement.InPoint + item.Placement.Duration)},asetpts=PTS-STARTPTS,volume='({volume})*{S(LayerVolume(item.Layer))}':eval=frame,adelay={delay}:all=1{AudioChannelFilter(item.Layer)}[{name}]"); audioInputs.Add($"[{name}]");
+
+                foreach (var transition in item.Layer.Transitions)
+                {
+                    if ((transition.Cut - item.Placement.Start).Duration() <= Post.Core.Transitions.Tolerance)
+                        volume = $"({volume})*{TransitionFilters.AudioRamp(transition, false, streamStart.TotalSeconds)}";
+                    if ((transition.Cut - item.Placement.End).Duration() <= Post.Core.Transitions.Tolerance)
+                        volume = $"({volume})*{TransitionFilters.AudioRamp(transition, true, streamStart.TotalSeconds)}";
+                }
+                filters.Add($"[{i}:a]atrim=start={Ts(item.Placement.InPoint - audioBefore)}:end={Ts(item.Placement.InPoint + item.Placement.Duration + audioAfter)},asetpts=PTS-STARTPTS,volume='({volume})*{S(LayerVolume(item.Layer))}':eval=frame,adelay={delay}:all=1{AudioChannelFilter(item.Layer)}[{name}]"); audioInputs.Add($"[{name}]");
             }
             var audio = "mixed";
             if (audioInputs.Count == 0) filters.Add($"anullsrc=r=48000:cl=stereo,atrim=duration={Ts(duration)}[{audio}]");
@@ -547,6 +619,14 @@ public sealed class MediaEngine(FfmpegTools tools, IProcessRunner runner)
         args.AddRange(["-movflags", "+faststart", output]);
         await RunFfmpegAsync(args, "Layer source preparation", stage, clip.SelectedDuration, from, to, progress, token);
     }
+
+    /// <summary>
+    /// The size the finished video will be. The preview needs it to lay overlays out in the
+    /// shape they will actually be exported in, rather than in the shape of whatever the
+    /// preview pane happens to have been dragged to.
+    /// </summary>
+    public static (int Width, int Height) OutputSize(MediaInfo media, ExportOptions options)
+        => CompositionSize(media, options, preview: false);
 
     private static (int Width, int Height) CompositionSize(MediaInfo media, ExportOptions options, bool preview)
     {

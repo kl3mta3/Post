@@ -33,8 +33,23 @@ internal sealed class PluginLoader
     /// </summary>
     public void LoadAll(Func<PluginManifest, IPostHost> hostFor, Version postVersion)
     {
+        // Before anything is loaded and starts holding its files open: copies that an
+        // update replaced last run, which could not be deleted while they were in use.
+        PluginStore.SweepRetired();
+
+        // The same plugin can be installed twice under two ids — a plugin that was renamed
+        // leaves the old folder behind, and both would be loaded, putting every menu entry
+        // on twice. One copy of an assembly is enough.
+        var already = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var manifest in PluginStore.Installed())
         {
+            if (!already.Add(manifest.Entry))
+            {
+                _failures.Add($"{manifest.Name}: already loaded from another folder, so this copy ({manifest.Id}) was skipped.");
+                continue;
+            }
+
             try { Load(manifest, hostFor(manifest), postVersion); }
             catch (Exception exception)
             {

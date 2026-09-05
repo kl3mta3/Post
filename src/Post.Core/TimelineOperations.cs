@@ -181,6 +181,62 @@ public static class TimelineOperations
         return best;
     }
 
+    /// <summary>
+    /// Moves a run of clips together along one layer, pushing whatever is in the way.
+    ///
+    /// The run lands where it was put, keeping the distances between its own clips. Anything
+    /// it comes down on is pushed along to sit after it, and if pushing one clip puts it on
+    /// top of the next, that one moves too, and so on down the layer. If the front of the run
+    /// lands inside a clip rather than past it, the run docks to the end of that clip first,
+    /// so it never sits half over the thing it was dropped onto.
+    ///
+    /// Nothing is refused. A group on a layer that has been cut up has nowhere free to land,
+    /// so refusing would mean never being able to move one at all; pushing is what a person
+    /// dragging a run of clips into the middle of a sequence is asking for.
+    /// </summary>
+    public static PlacementDropAction PlaceGroupWithinLayer(
+        TimelineLayer layer, IReadOnlyList<TimelinePlacement> moving, TimelinePlacement leader,
+        TimeSpan proposedLeaderStart, TimeSpan originalLeaderStart)
+    {
+        if (moving.Count <= 1) return PlaceWithinLayer(layer, leader, proposedLeaderStart, originalLeaderStart);
+
+        var travelling = moving.Select(item => item.Id).ToHashSet();
+        var gaps = moving.ToDictionary(item => item.Id, item => item.Start - leader.Start);
+        var firstGap = gaps.Values.Min();
+
+        // Nothing before zero: the run stops as one rather than bunching at the start.
+        if (proposedLeaderStart + firstGap < TimeSpan.Zero) proposedLeaderStart = -firstGap;
+
+        var spanStart = proposedLeaderStart + firstGap;
+        var span = moving.Max(item => proposedLeaderStart + gaps[item.Id] + item.Duration) - spanStart;
+
+        var others = layer.Placements
+            .Where(item => !travelling.Contains(item.Id))
+            .OrderBy(item => item.Start)
+            .ToList();
+
+        // Dropped partway into a clip, the run goes after it rather than across it.
+        var straddled = others.FirstOrDefault(item => item.Start < spanStart && spanStart < item.End);
+        var docked = straddled is not null;
+        if (straddled is not null) spanStart = straddled.End;
+
+        var leaderStart = spanStart - firstGap;
+        foreach (var item in moving) item.Start = leaderStart + gaps[item.Id];
+
+        // Everything from here on is pushed just far enough to keep out of the way, each in
+        // turn, so a push that would land on the next clip carries it along as well.
+        var cursor = spanStart + span;
+        foreach (var item in others)
+        {
+            if (item.End <= spanStart) continue;
+            if (item.Start < cursor) item.Start = cursor;
+            cursor = item.End;
+        }
+
+        SortPlacements(layer);
+        return docked ? PlacementDropAction.SnappedAfter : PlacementDropAction.Moved;
+    }
+
     public static PlacementDropAction PlaceWithinLayer(TimelineLayer layer, TimelinePlacement moving, TimeSpan proposedStart, TimeSpan originalStart)
     {
         proposedStart = proposedStart < TimeSpan.Zero ? TimeSpan.Zero : proposedStart;
@@ -229,8 +285,15 @@ public static class TimelineOperations
         var active = new List<ActiveTimelinePlacement>();
         foreach (var layer in composition.Layers.Where(layer => layer.IsVisible))
         {
-            foreach (var placement in layer.Placements.Where(item => projectTime >= item.Start && projectTime < item.End))
+            foreach (var placement in layer.Placements)
             {
+                // A transition either side of this clip keeps it on screen past its own span:
+                // the outgoing one carries on after the cut, the incoming one starts before
+                // it. The reach is already capped to the frames the media holds, so reading
+                // this far outside is always something the clip can answer.
+                var (before, after) = Transitions.ReachFor(layer, placement);
+                if (projectTime < placement.Start - before || projectTime >= placement.End + after) continue;
+
                 var clipTime = placement.InPoint + (projectTime - placement.Start);
                 var source = SequenceToSource(placement.Clip.Segments, clipTime);
                 if (source.SegmentIndex >= 0) active.Add(new(layer, placement, clipTime, source));

@@ -11,7 +11,7 @@ namespace Post.App;
 /// </summary>
 public partial class MainWindow
 {
-    private ColorGradingWindow? _colorGradingWindow;
+    private ColorGradingPanel? _gradingPanel;
     private EqualizerPanel? _equalizerPanel;
     private VideoEffect? _pendingPreviewEffect;
     private Guid? _suppressedPreviewEffectId;
@@ -21,13 +21,38 @@ public partial class MainWindow
     /// The effects used to render the paused frame: everything applied to the clip and
     /// the timeline, minus the one being edited, plus whatever is being auditioned.
     /// </summary>
-    private List<VideoEffect> PreviewEffectsFor(TimelinePlacement placement)
+    private List<VideoEffect> PreviewEffectsFor(TimelinePlacement placement, TimeSpan? projectTime = null)
     {
         var effects = new List<VideoEffect>();
         effects.AddRange(placement.Effects.Where(effect => effect.Id != _suppressedPreviewEffectId));
+
+        // Whichever LUT the clip's keyframes are holding at this moment, as an effect for
+        // the length of this frame. Export switches lut3d on and off by time; here there is
+        // only ever one frame on screen, so the one in force is the whole story.
+        var offset = (projectTime ?? _editPosition) - placement.Start;
+        if (KeyframeEvaluator.EvaluateText(placement.Keyframes, KeyframeProperty.Lut, offset) is { } lut && File.Exists(lut))
+            effects.Add(new VideoEffect { Kind = VideoEffectKind.Lut, FilePath = lut });
+
         effects.AddRange(_composition.OutputEffects.Where(effect => effect.Id != _suppressedPreviewEffectId));
         if (_pendingPreviewEffect is { } pending) effects.Add(pending);
         return effects;
+    }
+
+    /// <summary>
+    /// The grade being worked on in the Color Grading panel, shown on the moving picture.
+    ///
+    /// It used to bake a .cube and have ffmpeg render one still frame, which is why that
+    /// panel had a preview screen of its own. The shader samples a baked table either way,
+    /// so this is the same maths on live video instead of a photograph of it.
+    /// </summary>
+    private ColorGrade? _previewGrade;
+
+    private void SetPreviewGrade(ColorGrade? grade)
+    {
+        _previewGrade = grade is { IsNeutral: false } ? grade : null;
+        RefreshLivePreviewShaders();
+        UpdatePreviewShaders();
+        if (!_playing) _ = RenderCurrentScrubFrameAsync();
     }
 
     private void SetPreviewEffect(VideoEffect? pending, Guid? suppressed)
@@ -60,13 +85,14 @@ public partial class MainWindow
     private void ApplyPreviewShader(UIElement element, Guid key, IReadOnlyList<VideoEffect> effects)
     {
         var live = effects.Where(effect => effect.IsEnabled).ToArray();
-        var signature = string.Join('|', live.Select(effect => $"{effect.Kind}:{effect.Amount}:{effect.Brightness}:{effect.Contrast}:{effect.Saturation}:{effect.Gamma}:{effect.Hue}:{effect.FilePath}"));
+        var signature = string.Join('|', live.Select(effect => $"{effect.Kind}:{effect.Amount}:{effect.Brightness}:{effect.Contrast}:{effect.Saturation}:{effect.Gamma}:{effect.Hue}:{effect.FilePath}"))
+            + "|grade:" + (_previewGrade?.ToString() ?? "none");
         if (_previewShaders.TryGetValue(key, out var cached) && cached.Signature == signature)
         {
             if (!ReferenceEquals(element.Effect, cached.Effect)) element.Effect = cached.Effect;
             return;
         }
-        var shader = PreviewShaderEffect.For(live);
+        var shader = PreviewShaderEffect.For(live, _previewGrade);
         _previewShaders[key] = (signature, shader);
         element.Effect = shader;
     }
@@ -218,16 +244,24 @@ public partial class MainWindow
 
     private void ToggleColorGradingWindow_Click(object sender, RoutedEventArgs e)
     {
-        if (_colorGradingWindow is not null) { _colorGradingWindow.Close(); return; }
+        if (IsPaneVisible("grading")) { ClosePane("grading"); _gradingPanel?.StopPreview(); return; }
         ShowColorGradingWindow();
     }
 
     private void ShowColorGradingWindow()
     {
-        if (_colorGradingWindow is not null) { _colorGradingWindow.Activate(); return; }
-        _colorGradingWindow = new ColorGradingWindow(RenderGradePreviewAsync, AddGradeAsLut, this);
-        _colorGradingWindow.Closed += (_, _) => { _colorGradingWindow = null; if (ColorGradingWindowMenuItem is not null) ColorGradingWindowMenuItem.IsChecked = false; };
-        ColorGradingWindowMenuItem.IsChecked = true; _colorGradingWindow.Show();
+        OpenToolPane("grading", "Color Grading", 620, 560);
+        if (ColorGradingWindowMenuItem is not null) ColorGradingWindowMenuItem.IsChecked = true;
+    }
+
+    /// <summary>
+    /// The grading panel's contents, built the first time the pane is opened and kept, so
+    /// a grade being worked on survives the pane being docked, floated or put away.
+    /// </summary>
+    private FrameworkElement BuildGradingPanel()
+    {
+        _gradingPanel = new ColorGradingPanel(SetPreviewGrade, AddGradeAsLut);
+        return _gradingPanel;
     }
 
     /// <summary>
@@ -380,7 +414,8 @@ public partial class MainWindow
             .Where(entry => LayerIncludedInPreview(entry.Layer) && PlacementIncludedInPreview(entry.Placement)))
         {
             var placement = item.Placement;
-            if (!placement.Clip.Media.HasAudio || placement.Clip.PreviewPath is not { } path) continue;
+            // Split out onto its own layer, so this copy of it is not heard.
+            if (!placement.Clip.Media.HasAudio || placement.AudioMuted || placement.Clip.PreviewPath is not { } path) continue;
             active.Add(placement.Id);
             engine.EnsureSource(placement.Id, path);
             var volume = KeyframeEvaluator.Evaluate(placement.Keyframes, KeyframeProperty.Volume, time - placement.Start, 1);

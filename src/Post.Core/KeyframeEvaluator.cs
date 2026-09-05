@@ -23,6 +23,61 @@ public static class KeyframeEvaluator
         return points[^1].Value;
     }
 
+    /// <summary>
+    /// Which LUT is in force at this point. There is nothing between two lookup tables to
+    /// interpolate, so each holds until the next one takes over — and before the first
+    /// keyframe there is no LUT at all, which is what a clip looks like untouched.
+    /// </summary>
+    public static string? EvaluateText(IEnumerable<AnimationKeyframe> keyframes, KeyframeProperty property, TimeSpan offset)
+    {
+        string? held = null;
+        foreach (var point in keyframes.Where(item => item.Property == property).OrderBy(item => item.Offset))
+        {
+            if (point.Offset > offset) break;
+            held = string.IsNullOrWhiteSpace(point.Text) ? null : point.Text;
+        }
+        return held;
+    }
+
+    /// <summary>
+    /// Every stretch a LUT covers, in order: from the keyframe that names it until the one
+    /// that replaces it, and to the end for the last. Stretches with no LUT are left out,
+    /// which is what makes this the list of filters to apply.
+    /// </summary>
+    public static IReadOnlyList<(TimeSpan Start, TimeSpan End, string Lut)> TextSpans(
+        IEnumerable<AnimationKeyframe> keyframes, KeyframeProperty property, TimeSpan duration)
+    {
+        var points = keyframes.Where(item => item.Property == property).OrderBy(item => item.Offset).ToArray();
+        var spans = new List<(TimeSpan, TimeSpan, string)>();
+
+        for (var i = 0; i < points.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(points[i].Text)) continue;
+            var start = points[i].Offset < TimeSpan.Zero ? TimeSpan.Zero : points[i].Offset;
+            var end = i + 1 < points.Length ? points[i + 1].Offset : duration;
+            if (end > duration) end = duration;
+            if (end > start) spans.Add((start, end, points[i].Text!));
+        }
+        return spans;
+    }
+
+    /// <summary>Puts a LUT on the track at this point, replacing one already there.</summary>
+    public static AnimationKeyframe UpsertText(ICollection<AnimationKeyframe> keyframes, KeyframeProperty property,
+        TimeSpan offset, string? text, TimeSpan? maximum = null)
+    {
+        offset = offset < TimeSpan.Zero ? TimeSpan.Zero : maximum is { } max && offset > max ? max : offset;
+        var tolerance = TimeSpan.FromMilliseconds(1);
+        var existing = keyframes.FirstOrDefault(item => item.Property == property && (item.Offset - offset).Duration() <= tolerance);
+        if (existing is not null) { existing.Text = text; existing.Interpolation = KeyframeInterpolation.Discrete; return existing; }
+
+        var created = new AnimationKeyframe
+        {
+            Property = property, Offset = offset, Text = text,
+            Interpolation = KeyframeInterpolation.Discrete,
+        };
+        keyframes.Add(created); return created;
+    }
+
     public static AnimationKeyframe Upsert(ICollection<AnimationKeyframe> keyframes, KeyframeProperty property, TimeSpan offset, double value, KeyframeInterpolation interpolation, TimeSpan? maximum = null)
     {
         offset = offset < TimeSpan.Zero ? TimeSpan.Zero : maximum is { } max && offset > max ? max : offset;

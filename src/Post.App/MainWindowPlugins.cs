@@ -18,6 +18,7 @@ public partial class MainWindow
     private readonly PluginLoader _plugins = new();
     private readonly List<(string PluginName, ClipCommand Command)> _pluginClipCommands = [];
     private readonly List<(string PluginName, TextCommand Command)> _pluginTextCommands = [];
+    private readonly List<(string PluginName, SelectionCommand Command)> _pluginSelectionCommands = [];
 
     /// <summary>
     /// Starts the installed plugins. Failures are collected and shown once rather than
@@ -45,7 +46,9 @@ public partial class MainWindow
         if (!_pluginHosts.TryGetValue(plugin.Manifest.Id, out var host)) return;
         foreach (var command in host.ClipCommands) _pluginClipCommands.Add((plugin.Manifest.Name, command));
         foreach (var command in host.TextCommands) _pluginTextCommands.Add((plugin.Manifest.Name, command));
+        foreach (var command in host.SelectionCommands) _pluginSelectionCommands.Add((plugin.Manifest.Name, command));
         foreach (var command in host.ToolsCommands) AddPluginToolsCommand(plugin.Manifest.Name, command);
+        foreach (var command in host.WindowCommands) AddPluginWindowCommand(plugin.Manifest.Name, command);
     }
 
     /// <summary>
@@ -76,10 +79,26 @@ public partial class MainWindow
     /// <summary>Adds a plugin's own entry under Tools, below the Plugin Manager.</summary>
     private void AddPluginToolsCommand(string pluginName, ToolsCommand command)
     {
-        if (ToolsMenu is null) return;
+        // Tools ▸ Settings, where Post's own settings are. Every plugin that asks for a
+        // Tools entry is asking for its settings dialog, and loose among the actions is
+        // where they were cluttering things up.
+        var menu = SettingsMenu ?? ToolsMenu;
+        if (menu is null) return;
         var item = new MenuItem { Header = command.Header, ToolTip = $"From the {pluginName} plugin" };
         item.Click += async (_, _) => await RunPluginCommandAsync(pluginName, command.Invoke);
-        ToolsMenu.Items.Insert(ToolsMenu.Items.Count, item);
+        menu.Items.Insert(menu.Items.Count, item);
+    }
+
+    /// <summary>
+    /// Adds a plugin's window to Tools ▸ Windows, beside Post's own. Something that opens a
+    /// window belongs where the windows are listed, not loose among the settings entries.
+    /// </summary>
+    private void AddPluginWindowCommand(string pluginName, WindowCommand command)
+    {
+        if (WindowsMenu is null) return;
+        var item = new MenuItem { Header = command.Header, ToolTip = $"From the {pluginName} plugin" };
+        item.Click += async (_, _) => await RunPluginCommandAsync(pluginName, command.Invoke);
+        WindowsMenu.Items.Insert(WindowsMenu.Items.Count, item);
     }
 
     /// <summary>Adds whatever plugins offer for this clip to its right-click menu.</summary>
@@ -87,7 +106,11 @@ public partial class MainWindow
     {
         if (_pluginClipCommands.Count == 0) return;
         var context = new ClipContext(placement.Id, layer.Id, placement.Clip.SourcePath, placement.Start,
-            placement.Duration, placement.Clip.Media.HasAudio, placement.Clip.Media.HasVideo, placement.InPoint);
+            placement.Duration, placement.Clip.Media.HasAudio, placement.Clip.Media.HasVideo, placement.InPoint,
+            // Only when this clip is one of the selected does the count describe it. A
+            // right-click does not change the selection, so a clip outside it is one clip,
+            // whatever else happens to be highlighted elsewhere on the timeline.
+            IsSelected(placement.Id) ? Math.Max(1, _selection.Count) : 1);
 
         var offered = _pluginClipCommands.Where(item => Safe(item.Command.AppliesTo, context)).ToArray();
         if (offered.Length == 0) return;
@@ -105,7 +128,8 @@ public partial class MainWindow
     private void AddPluginTextCommands(ContextMenu menu, TimelineLayer layer, GraphicsOverlay graphic)
     {
         if (_pluginTextCommands.Count == 0) return;
-        var context = new TextContext(graphic.Id, layer.Id, graphic.Text ?? "", graphic.Start, graphic.Duration);
+        var context = new TextContext(graphic.Id, layer.Id, graphic.Text ?? "", graphic.Start, graphic.Duration,
+            IsSelected(graphic.Id) ? Math.Max(1, _selection.Count) : 1);
 
         var offered = _pluginTextCommands.Where(item => Safe(item.Command.AppliesTo, context)).ToArray();
         if (offered.Length == 0) return;

@@ -29,6 +29,8 @@ internal sealed class KeyframeTimeline : Grid
     private readonly ComboBox _property = new() { MinWidth = 110 };
     private readonly ComboBox _interpolation = new() { MinWidth = 110 };
     private readonly TextBox _value = new() { MinWidth = 70 };
+    // A LUT is picked, not typed: there is no number between two lookup tables.
+    private readonly ComboBox _lut = new() { MinWidth = 190, Visibility = Visibility.Collapsed };
     private readonly TextBlock _range = new() { Foreground = Brushes.LightGray, FontSize = 10, Margin = new Thickness(0, 2, 0, 0) };
     private readonly TextBlock _caretText = new() { FontFamily = new FontFamily("Consolas"), Foreground = Brushes.White, FontWeight = FontWeights.Bold };
     private readonly TextBlock _targetText = new() { Foreground = Brushes.LightGray, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -67,7 +69,7 @@ internal sealed class KeyframeTimeline : Grid
         _controls.Children.Add(heading);
         AddField("Property", _property, 1);
         var valuePanel = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
-        valuePanel.Children.Add(Label("Value")); valuePanel.Children.Add(_value); valuePanel.Children.Add(_range);
+        valuePanel.Children.Add(Label("Value")); valuePanel.Children.Add(_value); valuePanel.Children.Add(_lut); valuePanel.Children.Add(_range);
         SetColumn(valuePanel, 2); _controls.Children.Add(valuePanel);
         AddField("Interpolation after keyframe", _interpolation, 3);
 
@@ -110,10 +112,18 @@ internal sealed class KeyframeTimeline : Grid
     {
         _binding = binding;
         _offset = Clamp(binding.Offset);
+
+        // The row that was being worked on survives a rebind. This runs whenever the layer
+        // stack is refreshed, which is constantly, and dropping back to the first row every
+        // time is why stepping between keyframes always walked Position X however carefully
+        // another row had been picked.
+        var chosen = SelectedProperty;
+
         _property.SelectionChanged -= Property_Changed;
         _property.Items.Clear();
         foreach (var property in binding.Properties) _property.Items.Add(new PropertyChoice(Friendly(property), property));
-        if (_property.Items.Count > 0) _property.SelectedIndex = 0;
+        _property.SelectedItem = _property.Items.Cast<PropertyChoice>().FirstOrDefault(item => item.Value == chosen)
+            ?? (_property.Items.Count > 0 ? _property.Items[0] : null);
         _property.SelectionChanged += Property_Changed;
         _targetText.Text = binding.TargetName;
         SetContentVisible(true);
@@ -176,6 +186,28 @@ internal sealed class KeyframeTimeline : Grid
         _caretText.Text = $"EDIT CARET  {TimeText.Format(_offset)}   /   {TimeText.Format(Duration)}";
         if (SelectedProperty is not { } property) return;
         var existing = AtCaret(property);
+
+        // A LUT track is picked from the collection rather than typed, and it never
+        // interpolates: one lookup table holds until the next replaces it.
+        var isLut = property == KeyframeProperty.Lut;
+        _value.Visibility = isLut ? Visibility.Collapsed : Visibility.Visible;
+        _lut.Visibility = isLut ? Visibility.Visible : Visibility.Collapsed;
+        _interpolation.IsEnabled = !isLut;
+
+        if (isLut)
+        {
+            FillLuts();
+            var chosen = existing is not null
+                ? existing.Text
+                : KeyframeEvaluator.EvaluateText(Keyframes, property, _offset);
+            _lut.SelectedItem = _lut.Items.Cast<LutChoice>().FirstOrDefault(item =>
+                string.Equals(item.Path, chosen, StringComparison.OrdinalIgnoreCase)) ?? _lut.Items[0];
+            _range.Text = _lut.Items.Count > 1
+                ? "holds until the next one"
+                : "no LUTs yet — add one from Effects or Color Grading";
+            return;
+        }
+
         _value.Text = (existing?.Value ?? KeyframeEvaluator.Evaluate(Keyframes, property, _offset, _binding.Fallback(property))).ToString("0.###", CultureInfo.InvariantCulture);
         if (existing is not null) SelectInterpolation(existing.Interpolation);
         _range.Text = property switch
@@ -186,11 +218,40 @@ internal sealed class KeyframeTimeline : Grid
         };
     }
 
+    /// <summary>What a LUT keyframe can be set to: nothing, or one Post is keeping.</summary>
+    private sealed record LutChoice(string Name, string? Path)
+    {
+        public override string ToString() => Name;
+    }
+
+    private void FillLuts()
+    {
+        var wanted = new List<LutChoice> { new("No LUT", null) };
+        foreach (var path in LutLibrary.All())
+            wanted.Add(new LutChoice(System.IO.Path.GetFileNameWithoutExtension(path), path));
+
+        // Rebuilt only when the collection has actually changed, or choosing one would be
+        // undone by the next refresh.
+        var same = _lut.Items.Count == wanted.Count
+            && _lut.Items.Cast<LutChoice>().Zip(wanted).All(pair => pair.First.Path == pair.Second.Path);
+        if (same) return;
+
+        _lut.Items.Clear();
+        foreach (var choice in wanted) _lut.Items.Add(choice);
+    }
+
     private void SelectInterpolation(KeyframeInterpolation value) => _interpolation.SelectedItem = _interpolation.Items.Cast<InterpolationChoice>().First(item => item.Value == value);
 
     private void Set_Click(object sender, RoutedEventArgs e)
     {
         if (_binding is null) return;
+        if (SelectedProperty is KeyframeProperty.Lut)
+        {
+            KeyframeEvaluator.UpsertText(Keyframes, KeyframeProperty.Lut, _offset,
+                (_lut.SelectedItem as LutChoice)?.Path, Duration);
+            Changed = true; _binding.Changed(); RefreshAll();
+            return;
+        }
         if (SelectedProperty is not { } property || !double.TryParse(_value.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
         { MessageBox.Show(Window.GetWindow(this), "Enter a numeric keyframe value.", "Keyframes"); return; }
         value = property switch { KeyframeProperty.Scale => Math.Clamp(value, .01, 20), KeyframeProperty.Opacity => Math.Clamp(value, 0, 1), KeyframeProperty.Volume => Math.Clamp(value, 0, 4), KeyframeProperty.Rotation => Math.Clamp(value, -3600, 3600), _ => value };
@@ -233,7 +294,15 @@ internal sealed class KeyframeTimeline : Grid
     {
         _list.Items.Clear();
         foreach (var item in Keyframes.OrderBy(item => item.Offset).ThenBy(item => item.Property))
-            _list.Items.Add(new ListBoxItem { Content = $"{TimeText.Format(item.Offset)}   {Friendly(item.Property)}: {item.Value:0.###}   {Friendly(item.Interpolation)}", Tag = item, Style = _listItemStyle });
+            _list.Items.Add(new ListBoxItem
+            {
+                // A LUT keyframe has a name where the others have a number, and saying it
+                // holds is the only interpolation it has.
+                Content = item.Property == KeyframeProperty.Lut
+                    ? $"{TimeText.Format(item.Offset)}   LUT: {(string.IsNullOrWhiteSpace(item.Text) ? "none" : System.IO.Path.GetFileNameWithoutExtension(item.Text))}"
+                    : $"{TimeText.Format(item.Offset)}   {Friendly(item.Property)}: {item.Value:0.###}   {Friendly(item.Interpolation)}",
+                Tag = item, Style = _listItemStyle,
+            });
     }
 
     private void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -310,7 +379,7 @@ internal sealed class KeyframeTimeline : Grid
         SetCaret(_offset + (e.Delta > 0 ? _binding.FrameDuration : -_binding.FrameDuration)); e.Handled = true;
     }
 
-    private static string Friendly(KeyframeProperty property) => property switch { KeyframeProperty.PositionX => "Position X", KeyframeProperty.PositionY => "Position Y", _ => property.ToString() };
+    private static string Friendly(KeyframeProperty property) => property switch { KeyframeProperty.PositionX => "Position X", KeyframeProperty.PositionY => "Position Y", KeyframeProperty.Lut => "LUT", _ => property.ToString() };
     private static string Friendly(KeyframeInterpolation interpolation) => interpolation == KeyframeInterpolation.Discrete ? "Hold value" : interpolation.ToString();
 
     private static Style CreateListItemStyle()

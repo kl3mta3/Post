@@ -40,3 +40,4 @@ test/
 **/bin/
 **/obj/
 /Post.Plugins/
+PLUGIN-API.md

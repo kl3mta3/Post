@@ -115,6 +115,7 @@
                         </MenuItem.RenderTransform>
                         <MenuItem Header="New Project" InputGestureText="Ctrl+N" Click="NewProject_Click"/>
                         <MenuItem Header="Open Project…" InputGestureText="Ctrl+O" Click="OpenProject_Click"/>
+                        <MenuItem Header="Open File…" Click="Open_Click" ToolTip="Add media to this project — the same as ＋ in the Media panel"/>
                         <MenuItem x:Name="RecentProjectsMenu" Header="Recent Projects" SubmenuOpened="RecentProjectsMenu_SubmenuOpened"/>
                         <Separator/>
                         <MenuItem Header="Save" InputGestureText="Ctrl+S" Click="SaveProject_Click"/>
@@ -143,6 +144,16 @@
                         <MenuItem Header="Paste" InputGestureText="Ctrl+V" Click="Paste_Click"/>
                         <MenuItem Header="Delete" InputGestureText="Delete" Click="Delete_Click"/>
                         <Separator/>
+                        <MenuItem Header="Select">
+                            <MenuItem Header="Everything" InputGestureText="Ctrl+A" Click="SelectEverything_Click"/>
+                            <Separator/>
+                            <MenuItem Header="All video clips" Click="SelectVideo_Click"/>
+                            <MenuItem Header="All audio clips" Click="SelectAudio_Click"/>
+                            <MenuItem Header="All graphics and text" Click="SelectGraphics_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Nothing" Click="SelectNothing_Click"/>
+                        </MenuItem>
+                        <Separator/>
                         <MenuItem Header="Split Clip" InputGestureText="C" Click="SplitPlacement_Click"/>
                         <MenuItem Header="Screenshot" InputGestureText="P" Click="Snapshot_Click"/>
                     </MenuItem>
@@ -166,8 +177,9 @@
                             <MenuItem Header="Mute preview" IsCheckable="True" Click="MenuMute_Click"/>
                         </MenuItem>
                         <MenuItem Header="Show / Hide Panels">
-                            <MenuItem Header="Media panel" IsCheckable="True" IsChecked="True" Click="ToggleMediaPanel_Click"/>
-                            <MenuItem Header="Layers panel" IsCheckable="True" IsChecked="True" Click="ToggleLayersPanel_Click"/>
+                            <MenuItem x:Name="MediaPanelMenuItem" Header="Media panel" IsCheckable="True" IsChecked="True" Click="ToggleMediaPanel_Click"/>
+                            <MenuItem x:Name="PreviewPanelMenuItem" Header="Preview panel" IsCheckable="True" IsChecked="True" Click="TogglePreviewPanel_Click"/>
+                            <MenuItem x:Name="LayersPanelMenuItem" Header="Layers panel" IsCheckable="True" IsChecked="True" Click="ToggleLayersPanel_Click"/>
                             <Separator/>
                             <MenuItem x:Name="EffectsWindowMenuItem" Header="Effects" InputGestureText="Ctrl+E" IsCheckable="True" Click="ToggleEffectsWindow_Click"/>
                             <MenuItem x:Name="EqualizerWindowMenuItem" Header="Audio EQ" InputGestureText="Ctrl+Q" IsCheckable="True" Click="ToggleEqualizerWindow_Click"/>
@@ -175,16 +187,18 @@
                         <MenuItem Header="Reset Panel Layout" Click="ResetLayout_Click"/>
                     </MenuItem>
                     <MenuItem x:Name="ToolsMenu" Header="Tools">
-                        <MenuItem Header="Windows">
+                        <MenuItem x:Name="WindowsMenu" Header="Windows">
                             <MenuItem x:Name="KeyframesWindowMenuItem" Header="Keyframe Timeline" IsCheckable="True" Click="ToggleKeyframesWindow_Click"/>
                             <MenuItem x:Name="ColorGradingWindowMenuItem" Header="Color Grading" IsCheckable="True" Click="ToggleColorGradingWindow_Click"/>
                             <MenuItem x:Name="AnimationsWindowMenuItem" Header="Animations" IsCheckable="True" Click="ToggleAnimationsWindow_Click"/>
                         </MenuItem>
+                        <MenuItem x:Name="SettingsMenu" Header="Settings">
+                            <MenuItem Header="Post settings…" InputGestureText="Ctrl+," Click="Settings_Click"/>
+                            <MenuItem Header="Export settings…" Click="ExportSettings_Click"/>
+                            <Separator/>
+                        </MenuItem>
                         <Separator/>
                         <MenuItem Header="Plugin Manager…" Click="PluginManager_Click"/>
-                        <Separator/>
-                        <MenuItem Header="Export Settings…" Click="ExportSettings_Click"/>
-                        <MenuItem Header="Settings…" InputGestureText="Ctrl+," Click="Settings_Click"/>
                     </MenuItem>
                     <MenuItem Header="Help" RenderTransformOrigin="0.5,0.5">
                         <MenuItem.RenderTransform>
@@ -238,7 +252,7 @@
                 <xcad:LayoutPanel Orientation="Vertical">
                     <xcad:LayoutPanel Orientation="Horizontal" DockHeight="*">
                         <xcad:LayoutAnchorablePane DockWidth="280" DockMinWidth="175">
-                            <xcad:LayoutAnchorable Title="Media" ContentId="media" CanClose="False" CanHide="False" CanAutoHide="False">
+                            <xcad:LayoutAnchorable Title="Media" ContentId="media" CanClose="False" CanHide="True" CanAutoHide="False">
                                 <Border CornerRadius="7" BorderBrush="#20314C" BorderThickness="1" Background="#091426">
                                     <DockPanel>
                                         <Border DockPanel.Dock="Top" Background="#101D33" BorderBrush="#263D5E" BorderThickness="0,0,0,1" Padding="8">
@@ -255,7 +269,7 @@
                             </xcad:LayoutAnchorable>
                         </xcad:LayoutAnchorablePane>
                         <xcad:LayoutAnchorablePane DockWidth="*" DockMinWidth="420">
-                            <xcad:LayoutAnchorable Title="Preview" ContentId="preview" CanClose="False" CanHide="False" CanAutoHide="False">
+                            <xcad:LayoutAnchorable Title="Preview" ContentId="preview" CanClose="False" CanHide="True" CanAutoHide="False">
                                 <DockPanel>
                                     <Border DockPanel.Dock="Top" Background="#0A1326" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                                         <Grid Margin="8,5,8,5">
@@ -354,7 +368,7 @@
                         </xcad:LayoutAnchorablePane>
                     </xcad:LayoutPanel>
                     <xcad:LayoutAnchorablePane DockHeight="320" DockMinHeight="170">
-                        <xcad:LayoutAnchorable Title="Layers" ContentId="layers" CanClose="False" CanHide="False" CanAutoHide="False">
+                        <xcad:LayoutAnchorable Title="Layers" ContentId="layers" CanClose="False" CanHide="True" CanAutoHide="False">
                             <Grid Margin="4" PreviewMouseWheel="TimelineWorkspace_PreviewMouseWheel">
                                 <Grid.RowDefinitions>
                                     <RowDefinition x:Name="KeyframeStripRow" Height="0" MinHeight="0"/>
@@ -376,6 +390,7 @@
                                         <TextBlock x:Name="WorkAreaText" Text="  •  WORK: 00:00" Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" FontSize="11" Cursor="Hand" ToolTip="Click to set how far the timeline runs, which is the room you have to work in" MouseLeftButtonUp="WorkArea_MouseLeftButtonUp"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <TextBlock x:Name="CaretText" Text="00:00.000" Foreground="White" FontFamily="Consolas" FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0" ToolTip="Where the white edit caret is on the timeline"/>
                                         <Button Content="‹◆" Click="PreviousKeyframe_Click" Style="{StaticResource PillButton}" ToolTip="Move the white edit caret to the previous keyframe"/>
                                         <Button x:Name="KeyframeStripButton" Content="◇ Keyframes" Click="Keyframe_Click" Style="{StaticResource PillButton}" ToolTip="Show or hide the keyframe timeline above the layers"/>
                                         <Button Content="◆›" Click="NextKeyframe_Click" Style="{StaticResource PillButton}" ToolTip="Move the white edit caret to the next keyframe"/>

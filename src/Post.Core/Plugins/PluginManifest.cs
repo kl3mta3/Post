@@ -56,6 +56,16 @@ public sealed record PluginManifest
     /// <summary>What the plugin says it needs, shown before installing.</summary>
     public string[] Capabilities { get; init; } = [];
 
+    /// <summary>
+    /// What this plugin fetches for itself when it installs — a model, a voice pack — named
+    /// so it can be said out loud and given its share of the progress before a single file
+    /// is downloaded. Left out by a plugin that is only its files.
+    ///
+    /// The plugin is asked directly once its files are down, so this being absent costs the
+    /// split rather than the step: an undeclared setup still runs, just without warning.
+    /// </summary>
+    public string? Setup { get; init; }
+
     /// <summary>Where in the repository this came from, for showing the source.</summary>
     [JsonIgnore] public string? SourceUrl { get; init; }
 

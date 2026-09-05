@@ -128,7 +128,7 @@ internal sealed class EffectParameterPanel : StackPanel
         var browse = new Button { Content = "Add .cube file…", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(0, 0, 6, 0) };
         browse.Click += (_, _) =>
         {
-            var dialog = new OpenFileDialog { Filter = "Colour lookup table|*.cube|All files|*.*", Title = "Add a LUT" };
+            var dialog = new OpenFileDialog { Filter = "Color lookup table|*.cube|All files|*.*", Title = "Add a LUT" };
             if (dialog.ShowDialog(_owner) != true) return;
             // Kept alongside the saved grades, so it is still there next time.
             var kept = LutLibrary.Keep(dialog.FileName);

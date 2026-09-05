@@ -40,7 +40,7 @@ internal sealed class EffectsPanel : Grid
         new("Blur and Sharpen", "Blur", "Soften the picture with a gaussian blur.", Effect: VideoEffectKind.Blur),
         new("Blur and Sharpen", "Sharpen", "Add local contrast to bring out detail.", Effect: VideoEffectKind.Sharpen),
         new("Color and Image correction", "Color Correction", "Adjust brightness, contrast, saturation, gamma and hue.", Effect: VideoEffectKind.ColorCorrection),
-        new("Color and Image correction", "LUT and Looks", "Apply a ready-made look or any 3D colour lookup table. Both arrive as an ordinary LUT you can tweak in the Color Grading window.", Effect: VideoEffectKind.Lut),
+        new("Color and Image correction", "LUT and Looks", "Apply a ready-made look or any 3D color lookup table. Both arrive as an ordinary LUT you can tweak in the Color Grading window.", Effect: VideoEffectKind.Lut),
         new("Stylize", "Vignette", "Darken the edges of the frame towards the corners.", Effect: VideoEffectKind.Vignette),
     ];
 

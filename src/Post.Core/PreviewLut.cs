@@ -25,6 +25,14 @@ public static class PreviewLut
     /// left to right by blue. Returns null when the stack has no colour work to do.
     /// </summary>
     public static byte[]? BuildStrip(IEnumerable<VideoEffect> effects, int size = DefaultSize)
+        => BuildStrip(effects, null, size);
+
+    /// <summary>
+    /// The same, with a grade being worked on laid over the top. That is what makes the
+    /// Color Grading panel live: the grade is baked into this strip and sampled by the
+    /// shader, using the very maths the export bakes into its .cube.
+    /// </summary>
+    public static byte[]? BuildStrip(IEnumerable<VideoEffect> effects, ColorGrade? working, int size = DefaultSize)
     {
         var stages = new List<Func<(double R, double G, double B), (double R, double G, double B)>>();
         foreach (var effect in effects)
@@ -44,6 +52,10 @@ public static class PreviewLut
                 stages.Add(colour => table.Sample(colour.R, colour.G, colour.B));
             }
         }
+        // Last, so it sits on top of whatever the clip already carries — the same place it
+        // would land as a LUT added to the end of the stack.
+        if (working is { IsNeutral: false }) stages.Add(colour => working.Apply(colour.R, colour.G, colour.B));
+
         if (stages.Count == 0) return null;
 
         var strip = new byte[size * size * size * 4];

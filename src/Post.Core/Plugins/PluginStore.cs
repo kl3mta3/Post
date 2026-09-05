@@ -38,6 +38,9 @@ public static class PluginStore
         {
             foreach (var folder in Directory.GetDirectories(Folder))
             {
+                // A copy an update replaced still has its manifest, and is on its way out.
+                if (Path.GetFileName(folder).Contains(Retired, StringComparison.Ordinal)) continue;
+
                 var manifest = Path.Combine(folder, "plugin.json");
                 if (!File.Exists(manifest)) continue;
                 try
@@ -86,7 +89,7 @@ public static class PluginStore
             }
 
             var target = FolderFor(manifest.Id);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
+            Retire(target);
             Directory.Move(staging, target);
 
             // The manifest is kept beside it, so what is installed can be named later.
@@ -99,13 +102,53 @@ public static class PluginStore
         }
     }
 
+    /// <summary>The mark on a folder that has been replaced but could not be deleted yet.</summary>
+    private const string Retired = ".retired-";
+
+    /// <summary>
+    /// Moves an installed copy out of the way so a new one can take its place.
+    ///
+    /// Deleting it is the obvious thing and does not work: a plugin Post has loaded holds
+    /// its own .dll open, and Windows refuses to delete a loaded assembly — which is the
+    /// whole reason updating a plugin used to fail with "access is denied". Renaming one is
+    /// allowed, so the old copy is renamed and swept up later, once nothing has it open.
+    /// </summary>
+    private static void Retire(string target)
+    {
+        if (!Directory.Exists(target)) return;
+
+        try { Directory.Delete(target, true); return; }
+        catch (Exception) when (Directory.Exists(target)) { }
+
+        var retired = $"{target}{Retired}{DateTime.UtcNow:yyyyMMddHHmmss}";
+        Directory.Move(target, retired);
+        TryDelete(retired);
+    }
+
+    /// <summary>
+    /// Clears out copies replaced by an update whose files were still open at the time.
+    /// Called at startup, when the previous run's locks are gone.
+    /// </summary>
+    public static void SweepRetired()
+    {
+        foreach (var folder in Directory.EnumerateDirectories(Folder, $"*{Retired}*"))
+            TryDelete(folder);
+    }
+
+    private static void TryDelete(string folder)
+    {
+        try { Directory.Delete(folder, true); } catch { }
+    }
+
     public static bool Remove(string id)
     {
         try
         {
             var folder = FolderFor(id);
             if (!Directory.Exists(folder)) return false;
-            Directory.Delete(folder, true);
+            // Same reason as an update: a loaded plugin cannot be deleted, only renamed
+            // aside and swept up next time Post starts.
+            Retire(folder);
             return true;
         }
         catch { return false; }

@@ -49,6 +49,31 @@ public static class VideoEffects
     }
 
     /// <summary>
+    /// The LUTs a clip's keyframes switch between, as one filter per stretch.
+    ///
+    /// lut3d takes ffmpeg's enable=, so each one only touches the frames in its own window
+    /// and passes everything else straight through — which is how a lookup table can change
+    /// partway through a clip without cutting the clip up.
+    ///
+    /// <paramref name="offsetSeconds"/> is where the clip sits on the timeline: by this
+    /// point in the graph the stream has been shifted to project time, so the windows have
+    /// to be too.
+    /// </summary>
+    public static List<string> BuildLutKeyframes(
+        IEnumerable<AnimationKeyframe>? keyframes, TimeSpan duration, double offsetSeconds = 0)
+    {
+        var filters = new List<string>();
+        if (keyframes is null) return filters;
+
+        foreach (var (start, end, lut) in KeyframeEvaluator.TextSpans(keyframes, KeyframeProperty.Lut, duration))
+        {
+            if (!File.Exists(lut)) continue;
+            filters.Add($"lut3d=file={EscapePath(lut)}:enable='between(t,{S(start.TotalSeconds + offsetSeconds)},{S(end.TotalSeconds + offsetSeconds)})'");
+        }
+        return filters;
+    }
+
+    /// <summary>
     /// Filter options are split on ':' and filters on ',', and a Windows drive letter
     /// contains a colon, so the path has to be escaped for the filtergraph parser.
     /// </summary>

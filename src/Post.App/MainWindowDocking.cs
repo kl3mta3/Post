@@ -29,11 +29,19 @@ public partial class MainWindow
         // Remember what each pane holds, because restoring a saved arrangement rebuilds
         // the panes and asks for their content back by id.
         foreach (var anchorable in Docking.Layout.Descendents().OfType<LayoutAnchorable>())
+        {
             if (anchorable.ContentId is { } id && anchorable.Content is { } content)
                 _paneContent[id] = content;
 
+            // The panes declared in the markup can be closed with their own X now, so they
+            // need the same tick-keeping the tool panes get when they are created.
+            anchorable.Hiding += ToolPaneHiding;
+        }
+
         _defaultDockLayout = SerializeDockLayout();
         if (!RestoreDockLayout()) ApplyDefaultPaneSizes();
+        AllowPanesToClose();
+        SyncPanelMenu();
         WatchPreviewForMoves();
     }
 
@@ -95,6 +103,7 @@ public partial class MainWindow
     {
         "effects" => BuildEffectsPanel(),
         "equalizer" => BuildEqualizerPanel(),
+        "grading" => BuildGradingPanel(),
         _ => throw new ArgumentOutOfRangeException(nameof(contentId), contentId, "No such tool pane."),
     };
 
@@ -149,11 +158,62 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Media, Preview and Layers get their own X, whatever a saved arrangement says —
+    /// AvalonDock writes these flags into the layout it saves, so one stored while the panes
+    /// were fixed would keep them fixed forever.
+    ///
+    /// The X hides rather than closes, and the difference matters: closing takes the pane
+    /// out of the layout altogether, so nothing raises Hiding to untick the menu and there
+    /// is no pane left for Show to find — which is how a closed panel became unreachable
+    /// short of resetting the whole arrangement. Hidden, it stays put and comes back.
+    /// </summary>
+    private void AllowPanesToClose()
+    {
+        foreach (var anchorable in Docking.Layout.Descendents().OfType<LayoutAnchorable>())
+        {
+            if (anchorable.ContentId is not ("media" or "preview" or "layers")) continue;
+            anchorable.CanClose = false;
+            anchorable.CanHide = true;
+            anchorable.Hiding -= ToolPaneHiding;
+            anchorable.Hiding += ToolPaneHiding;
+        }
+    }
+
+    /// <summary>
+    /// Points the Show / Hide Panels ticks at what the layout actually holds.
+    ///
+    /// The ticks start checked in the markup and a restored arrangement never touched them,
+    /// so a Post reopened with the Media panel closed came up claiming it was open — and the
+    /// first click then hid an already hidden panel, which looked like the menu doing
+    /// nothing at all. It took two clicks to get a panel back, and the tick was the liar.
+    /// </summary>
+    private void SyncPanelMenu()
+    {
+        if (MediaPanelMenuItem is not null) MediaPanelMenuItem.IsChecked = IsPaneVisible("media");
+        if (PreviewPanelMenuItem is not null) PreviewPanelMenuItem.IsChecked = IsPaneVisible("preview");
+        if (LayersPanelMenuItem is not null) LayersPanelMenuItem.IsChecked = IsPaneVisible("layers");
+        if (EffectsWindowMenuItem is not null) EffectsWindowMenuItem.IsChecked = IsPaneVisible("effects");
+        if (EqualizerWindowMenuItem is not null) EqualizerWindowMenuItem.IsChecked = IsPaneVisible("equalizer");
+        if (ColorGradingWindowMenuItem is not null) ColorGradingWindowMenuItem.IsChecked = IsPaneVisible("grading");
+    }
+
     private void ToolPaneHiding(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (sender is not LayoutAnchorable anchorable) return;
         if (anchorable.ContentId == "effects" && EffectsWindowMenuItem is not null) EffectsWindowMenuItem.IsChecked = false;
         if (anchorable.ContentId == "equalizer" && EqualizerWindowMenuItem is not null) EqualizerWindowMenuItem.IsChecked = false;
+        if (anchorable.ContentId == "grading" && ColorGradingWindowMenuItem is not null) { ColorGradingWindowMenuItem.IsChecked = false; _gradingPanel?.StopPreview(); }
+
+        // Putting the preview away stops it playing. Sound coming out of a panel that is not
+        // on screen is the kind of thing you go hunting for.
+        if (anchorable.ContentId == "preview") Pause();
+
+        // Closed with the pane's own X rather than from the menu: the tick has to follow,
+        // or Show / Hide Panels claims a panel is there when it is not.
+        if (anchorable.ContentId == "media" && MediaPanelMenuItem is not null) MediaPanelMenuItem.IsChecked = false;
+        if (anchorable.ContentId == "preview" && PreviewPanelMenuItem is not null) PreviewPanelMenuItem.IsChecked = false;
+        if (anchorable.ContentId == "layers" && LayersPanelMenuItem is not null) LayersPanelMenuItem.IsChecked = false;
     }
 
     private string SerializeDockLayout()
@@ -173,7 +233,7 @@ public partial class MainWindow
             if (args.Model.ContentId is not { } id) { args.Cancel = true; return; }
             if (!_paneContent.TryGetValue(id, out var content))
             {
-                if (id is not ("effects" or "equalizer")) { args.Cancel = true; return; }
+                if (id is not ("effects" or "equalizer" or "grading")) { args.Cancel = true; return; }
                 content = _paneContent[id] = ScrollHost(BuildToolPane(id));   // reopened from a saved arrangement
                 if (args.Model is LayoutAnchorable restored) restored.Hiding += ToolPaneHiding;
             }
@@ -211,8 +271,26 @@ public partial class MainWindow
     /// <summary>Shows or hides one pane by its id, for the View and Tools menus.</summary>
     private void ShowPane(string contentId, bool show)
     {
-        if (Pane(contentId) is not { } anchorable) return;
-        if (show) { anchorable.Show(); anchorable.IsActive = true; } else anchorable.Hide();
+        if (Pane(contentId) is { } anchorable)
+        {
+            if (show) { anchorable.Show(); anchorable.IsActive = true; } else anchorable.Hide();
+            return;
+        }
+
+        // Not in the layout at all. A pane that was genuinely closed rather than hidden is
+        // gone, and asking for it back used to do nothing at all — the only way out was
+        // resetting the whole arrangement. Its content is still held, so it can be put back.
+        if (!show || !_paneContent.TryGetValue(contentId, out var content)) return;
+
+        var restored = new LayoutAnchorable
+        {
+            Title = contentId switch { "media" => "Media", "preview" => "Preview", _ => "Layers" },
+            ContentId = contentId, Content = content,
+            CanClose = false, CanHide = true, CanAutoHide = false,
+        };
+        restored.AddToLayout(Docking, AnchorableShowStrategy.Most | AnchorableShowStrategy.Left);
+        restored.Hiding += ToolPaneHiding;
+        restored.IsActive = true;
     }
 
     /// <summary>
@@ -221,8 +299,44 @@ public partial class MainWindow
     /// </summary>
     private bool IsPaneVisible(string contentId) => Pane(contentId) is { IsHidden: false };
 
-    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    private bool _closingConfirmed;
+
+    /// <summary>
+    /// Nothing is thrown away without being offered back first. Saving is asynchronous and
+    /// closing is not, so the close is called off, the question asked, and the window closed
+    /// again once there is an answer.
+    /// </summary>
+    private async Task<bool> MayCloseAsync()
     {
+        foreach (var project in _projects.Where(item => item.HasUnsavedChanges).ToArray())
+        {
+            var answer = MessageBox.Show(this,
+                $"Save the changes to {project.Name}?", "Post",
+                MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+
+            if (answer == MessageBoxResult.Cancel) return false;
+            if (answer == MessageBoxResult.No) continue;
+
+            await SaveProjectAsync(project);
+
+            // Still unsaved means the file dialog was called off, which is a change of mind
+            // about closing rather than a decision to lose the work.
+            if (project.HasUnsavedChanges) return false;
+        }
+        return true;
+    }
+
+    protected override async void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_closingConfirmed)
+        {
+            e.Cancel = true;
+            if (!await MayCloseAsync()) return;
+            _closingConfirmed = true;
+            Close();
+            return;
+        }
+
         SaveDockLayout();
         base.OnClosing(e);
     }

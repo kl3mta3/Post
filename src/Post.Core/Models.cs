@@ -26,7 +26,9 @@ public enum AudioChannelSource { Both = 0, Left = 1, Right = 2 }
 public enum GraphicsOverlayKind { Text = 0, Image = 1, SolidColor = 2, Gradient = 3, Lottie = 4 }
 public enum GraphicGradientKind { Linear, Radial }
 public enum KeyframeInterpolation { Linear, Discrete, Smooth }
-public enum KeyframeProperty { PositionX, PositionY, Scale, Opacity, Volume, Rotation }
+// Keep the numeric values stable because Post project JSON stores enums as numbers: add to
+// the end. Lut is the odd one — it holds a file, not a number, and never interpolates.
+public enum KeyframeProperty { PositionX, PositionY, Scale, Opacity, Volume, Rotation, Lut }
 // Keep the numeric values stable because Post project JSON stores enums as numbers.
 public enum VideoEffectKind { Vignette = 0, Blur = 1, Sharpen = 2, ColorCorrection = 3, Lut = 4 }
 
@@ -86,6 +88,13 @@ public sealed class AnimationKeyframe
     public TimeSpan Offset { get; set; }
     public double Value { get; set; }
     public KeyframeInterpolation Interpolation { get; set; } = KeyframeInterpolation.Linear;
+
+    /// <summary>
+    /// The LUT this keyframe switches to, for <see cref="KeyframeProperty.Lut"/>. Null is
+    /// no LUT, which is how a clip starts and what it goes back to. Numeric properties
+    /// leave it alone.
+    /// </summary>
+    public string? Text { get; set; }
 }
 
 public sealed class MediaSegment
@@ -128,10 +137,76 @@ public sealed class TimelinePlacement
     public ObservableCollection<AnimationKeyframe> Keyframes { get; } = [];
     public ObservableCollection<VideoEffect> Effects { get; } = [];
     /// <summary>Constant spin in degrees per second; negative turns anticlockwise.</summary>
+    /// <summary>
+    /// Its sound is not heard, though the clip is still here. Set when the audio has been
+    /// split out onto a layer of its own, so the same sound is not played twice.
+    /// </summary>
+    public bool AudioMuted { get; set; }
+
     public double SpinDegreesPerSecond { get; set; }
     public TimeSpan AvailableDuration => Clip.SelectedDuration > InPoint ? Clip.SelectedDuration - InPoint : TimeSpan.Zero;
     public TimeSpan Duration => Length is { } length && length < AvailableDuration ? length : AvailableDuration;
     public TimeSpan End => Start + Duration;
+}
+
+// Keep the numeric values stable because Post project JSON stores enums as numbers.
+public enum TransitionKind
+{
+    Dissolve = 0, FadeToBlack = 1,
+    WipeLeft = 2, WipeRight = 3, WipeUp = 4, WipeDown = 5,
+    IrisIn = 6, IrisOut = 7,
+    PushLeft = 8, PushRight = 9,
+    // Appended, because the numbers are what a saved project stores.
+    FadeFromBlack = 10,
+}
+
+/// <summary>
+/// Where a transition sits relative to its cut, the way Premiere puts it.
+///
+/// It is not decoration: it decides which side has to supply the spare frames. Centred needs
+/// handles on both, starting at the cut needs them only from the outgoing clip, and ending at
+/// the cut only from the incoming one — so a cut with nothing spare on one side can still
+/// carry a transition by leaning on the other.
+/// </summary>
+public enum TransitionAlignment { CenterAtCut = 0, StartAtCut = 1, EndAtCut = 2 }
+
+/// <summary>
+/// A transition sitting over a cut between two clips.
+///
+/// It does not move either clip. Both stay where they were put, abutting at the cut, and the
+/// transition reaches into the media each of them is not using — past the outgoing clip's
+/// out-point, and before the incoming clip's in-point. An edit does not change length, and
+/// nothing is trimmed, because a transition is not a reason to throw away somebody's frames.
+///
+/// What that costs is that the frames have to be there. When they are not, the transition is
+/// the thing that gives: it shortens to whatever the media can supply.
+/// </summary>
+public sealed class ClipTransition
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public TransitionKind Kind { get; set; } = TransitionKind.Dissolve;
+
+    /// <summary>Where the cut is. The transition is centred on it.</summary>
+    public TimeSpan Cut { get; set; }
+
+    public TimeSpan Duration { get; set; } = DefaultDuration;
+    public TransitionAlignment Alignment { get; set; } = TransitionAlignment.CenterAtCut;
+
+    public static readonly TimeSpan DefaultDuration = TimeSpan.FromSeconds(1);
+
+    public TimeSpan Start => Alignment switch
+    {
+        TransitionAlignment.StartAtCut => Cut,
+        TransitionAlignment.EndAtCut => Cut - Duration,
+        _ => Cut - TimeSpan.FromTicks(Duration.Ticks / 2),
+    };
+
+    public TimeSpan End => Start + Duration;
+
+    /// <summary>How far through, 0 to 1, at a point in project time.</summary>
+    public double Progress(TimeSpan at) => Duration <= TimeSpan.Zero
+        ? 1
+        : Math.Clamp((at - Start).TotalSeconds / Duration.TotalSeconds, 0, 1);
 }
 
 public sealed class TimelineLayer
@@ -159,6 +234,7 @@ public sealed class TimelineLayer
     public TimelineLayerKind Kind { get; set; }
     public ObservableCollection<TimelinePlacement> Placements { get; } = [];
     public ObservableCollection<GraphicsOverlay> Graphics { get; } = [];
+    public ObservableCollection<ClipTransition> Transitions { get; } = [];
 }
 
 public sealed class GraphicsOverlay
@@ -170,14 +246,34 @@ public sealed class GraphicsOverlay
     public string? RenderedImagePath { get; set; }
     public string FontFamily { get; set; } = "Segoe UI";
     public double FontSize { get; set; } = 72;
+    /// <summary>Text: white, and solid.</summary>
     public string Foreground { get; set; } = "#FFFFFFFF";
-    public string Background { get; set; } = "#00000000";
+
+    /// <summary>
+    /// Background: white, and invisible. Transparent black looks the same — nothing — but
+    /// opens the picker on a colour with no brightness left in it, so raising the opacity
+    /// gives a black plate and the brightness has to be found and raised as well. Starting
+    /// from white means the one slider that was reached for does what it looks like it will.
+    /// </summary>
+    public string Background { get; set; } = "#00FFFFFF";
     public string FillColor1 { get; set; } = "#FFFFFFFF";
     public string FillColor2 { get; set; } = "#FF000000";
     public bool UseSecondFillColor { get; set; } = true;
     public GraphicGradientKind GradientKind { get; set; } = GraphicGradientKind.Linear;
     public double GradientAngle { get; set; }
     public double Opacity { get; set; } = 1;
+
+    /// <summary>
+    /// How round the background's corners are, from 0 for square to 1, where the radius is
+    /// half the shorter side — a pill, or a circle on a square box. A fraction rather than
+    /// a number of pixels, so a box keeps its shape when it is resized.
+    /// </summary>
+    public double CornerRadius { get; set; }
+
+    /// <summary>The radius in pixels for a box of this size.</summary>
+    public double CornerRadiusFor(double width, double height) =>
+        Math.Clamp(CornerRadius, 0, 1) * Math.Min(width, height) / 2;
+
     public bool PreserveAspectRatio { get; set; } = true;
     public double X { get; set; } = .35;
     public double Y { get; set; } = .4;

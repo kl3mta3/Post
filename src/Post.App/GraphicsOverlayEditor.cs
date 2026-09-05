@@ -17,15 +17,17 @@ internal sealed class GraphicsOverlayEditor : Window
     private readonly TextBox _text = new() { AcceptsReturn = true, Height = 74, TextWrapping = TextWrapping.Wrap };
     private readonly ComboBox _font = new() { IsEditable = true };
     private readonly Slider _fontSize = new() { Minimum = 10, Maximum = 220, TickFrequency = 1 };
-    private readonly ComboBox _foreground = ColorBox();
-    private readonly ComboBox _background = ColorBox();
-    private readonly ComboBox _fill1 = ColorBox();
-    private readonly ComboBox _fill2 = ColorBox();
+    private readonly ColorField _foreground = new();
+    private readonly ColorField _background = new();
+    private readonly ColorField _fill1 = new();
+    private readonly ColorField _fill2 = new();
     private readonly CheckBox _useSecondFill = new() { Content = "Blend to a second color", Foreground = Brushes.White };
     private readonly ComboBox _gradientKind = new();
     private readonly Slider _gradientAngle = new() { Minimum = -180, Maximum = 180, TickFrequency = 1 };
     private readonly TextBlock _gradientAngleLabel = new() { Foreground = Brushes.LightGray };
     private readonly Slider _opacity = new() { Minimum = .05, Maximum = 1, TickFrequency = .05 };
+    // 0 is a hard rectangle, 1 puts the radius at half the shorter side: a pill.
+    private readonly Slider _corners = new() { Minimum = 0, Maximum = 1, TickFrequency = .05 };
     private readonly CheckBox _aspect = new() { Content = "Lock image aspect ratio", Foreground = Brushes.White };
     private readonly Line _verticalGuide = new() { Stroke = new SolidColorBrush(Color.FromRgb(69, 210, 235)), StrokeThickness = 1.25, StrokeDashArray = new DoubleCollection([5, 3]), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
     private readonly Line _horizontalGuide = new() { Stroke = new SolidColorBrush(Color.FromRgb(69, 210, 235)), StrokeThickness = 1.25, StrokeDashArray = new DoubleCollection([5, 3]), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
@@ -33,7 +35,12 @@ internal sealed class GraphicsOverlayEditor : Window
     private Point _itemOrigin;
     private bool _refreshQueued;
 
-    public GraphicsOverlayEditor(GraphicsOverlay target)
+    /// <param name="lockText">
+    /// Editing many overlays at once: they each keep their own words, so the words are the
+    /// one thing that cannot be typed here. Everything else — where it sits, how big, the
+    /// font, the colours — is exactly the same dialog, dragged the same way.
+    /// </param>
+    public GraphicsOverlayEditor(GraphicsOverlay target, bool lockText = false)
     {
         _target = target;
         Title = target.Kind switch { GraphicsOverlayKind.Text => "Text Overlay", GraphicsOverlayKind.Image => "Image Overlay", GraphicsOverlayKind.SolidColor => "Solid Color Graphic", GraphicsOverlayKind.Gradient => "Gradient Graphic", _ => "Graphic" };
@@ -46,6 +53,12 @@ internal sealed class GraphicsOverlayEditor : Window
             TextSearch.SetText(option, family.Source); _font.Items.Add(option);
         }
         _text.Text = target.Text;
+        if (lockText)
+        {
+            _text.IsEnabled = false;
+            _text.Foreground = Brushes.Gray;
+            _text.ToolTip = "Each overlay keeps its own words. Edit one on its own to change them.";
+        }
         _font.Text = string.IsNullOrWhiteSpace(target.FontFamily) ? "Segoe UI" : target.FontFamily;
         _font.FontFamily = new FontFamily(_font.Text); _fontSize.Value = target.FontSize;
         _foreground.Text = string.IsNullOrWhiteSpace(target.Foreground) ? "White" : target.Foreground;
@@ -54,7 +67,7 @@ internal sealed class GraphicsOverlayEditor : Window
         _fill2.Text = string.IsNullOrWhiteSpace(target.FillColor2) ? "Black" : target.FillColor2;
         _useSecondFill.IsChecked = target.UseSecondFillColor; _gradientKind.Items.Add(GraphicGradientKind.Linear); _gradientKind.Items.Add(GraphicGradientKind.Radial); _gradientKind.SelectedItem = target.GradientKind;
         _gradientAngle.Value = target.GradientAngle; _gradientAngleLabel.Text = $"Angle: {target.GradientAngle:0}°";
-        _opacity.Value = target.Opacity; _aspect.IsChecked = target.PreserveAspectRatio;
+        _opacity.Value = target.Opacity; _corners.Value = target.CornerRadius; _aspect.IsChecked = target.PreserveAspectRatio;
 
         var settings = new StackPanel { Margin = new Thickness(16) };
         if (target.Kind == GraphicsOverlayKind.Text)
@@ -74,6 +87,15 @@ internal sealed class GraphicsOverlayEditor : Window
                 settings.Children.Add(_useSecondFill); settings.Children.Add(Label("Color 2")); settings.Children.Add(_fill2);
                 settings.Children.Add(Label("Blend")); settings.Children.Add(_gradientKind); settings.Children.Add(Label("Angle")); settings.Children.Add(_gradientAngle); settings.Children.Add(_gradientAngleLabel);
             }
+        }
+        if (target.Kind == GraphicsOverlayKind.Text)
+        {
+            settings.Children.Add(Label("Background corners"));
+            settings.Children.Add(_corners);
+            settings.Children.Add(new TextBlock
+            {
+                Text = "square through to a pill", Foreground = Theme.Hint, FontSize = 11,
+            });
         }
         settings.Children.Add(Label("Opacity")); settings.Children.Add(_opacity);
         settings.Children.Add(new TextBlock { Text = "Drag the overlay to position it. Its center snaps to the 25%, 50%, and 75% guides. Drag the cyan corner to resize it.", Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 18, 0, 0) });
@@ -112,23 +134,14 @@ internal sealed class GraphicsOverlayEditor : Window
         _text.TextChanged += (_, _) => QueueRefresh();
         _font.SelectionChanged += (_, _) => { if (_font.SelectedItem is ComboBoxItem { Tag: string name }) { _font.Text = name; _font.FontFamily = new FontFamily(name); } QueueRefresh(); };
         _font.LostKeyboardFocus += (_, _) => { UpdateSelectedFontPreview(); QueueRefresh(); };
-        _fontSize.ValueChanged += (_, _) => QueueRefresh(); _foreground.SelectionChanged += (_, _) => QueueRefresh(); _background.SelectionChanged += (_, _) => QueueRefresh(); _opacity.ValueChanged += (_, _) => QueueRefresh();
-        _foreground.LostKeyboardFocus += (_, _) => QueueRefresh(); _background.LostKeyboardFocus += (_, _) => QueueRefresh(); _aspect.Checked += (_, _) => QueueRefresh(); _aspect.Unchecked += (_, _) => QueueRefresh();
+        _fontSize.ValueChanged += (_, _) => QueueRefresh(); _foreground.Changed += QueueRefresh; _background.Changed += QueueRefresh; _opacity.ValueChanged += (_, _) => QueueRefresh(); _corners.ValueChanged += (_, _) => QueueRefresh();
+        _aspect.Checked += (_, _) => QueueRefresh(); _aspect.Unchecked += (_, _) => QueueRefresh();
         _font.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler((_, _) => { UpdateSelectedFontPreview(); QueueRefresh(); }));
-        _foreground.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler((_, _) => QueueRefresh()));
-        _background.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler((_, _) => QueueRefresh()));
-        _fill1.SelectionChanged += (_, _) => QueueRefresh(); _fill2.SelectionChanged += (_, _) => QueueRefresh();
-        _fill1.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler((_, _) => QueueRefresh())); _fill2.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler((_, _) => QueueRefresh()));
+        _fill1.Changed += QueueRefresh; _fill2.Changed += QueueRefresh;
         _useSecondFill.Checked += (_, _) => { _fill2.IsEnabled = true; QueueRefresh(); }; _useSecondFill.Unchecked += (_, _) => { _fill2.IsEnabled = false; QueueRefresh(); }; _fill2.IsEnabled = _useSecondFill.IsChecked == true;
         _gradientKind.SelectionChanged += (_, _) => QueueRefresh(); _gradientAngle.ValueChanged += (_, _) => { _gradientAngleLabel.Text = $"Angle: {_gradientAngle.Value:0}°"; QueueRefresh(); };
     }
 
-    private static ComboBox ColorBox()
-    {
-        var box = new ComboBox { IsEditable = true };
-        foreach (var color in new[] { "Transparent", "White", "Black", "Red", "Orange", "Yellow", "Lime", "Cyan", "DeepSkyBlue", "Purple", "#FFFFFFFF", "#AA000000" }) box.Items.Add(color);
-        return box;
-    }
     private static TextBlock Label(string text) => new() { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 4) };
     private void UpdateSelectedFontPreview()
     {
@@ -157,7 +170,7 @@ internal sealed class GraphicsOverlayEditor : Window
             return new Image { Source = new BitmapImage(new Uri(path)), Stretch = _aspect.IsChecked == true ? Stretch.Uniform : Stretch.Fill };
         if (_target.Kind is GraphicsOverlayKind.SolidColor or GraphicsOverlayKind.Gradient)
             return new Border { Background = FillBrush(_fill1.Text, _fill2.Text, _target.Kind == GraphicsOverlayKind.Gradient && _useSecondFill.IsChecked == true, _gradientKind.SelectedItem is GraphicGradientKind kind ? kind : GraphicGradientKind.Linear, _gradientAngle.Value) };
-        return new Border { Background = BrushOf(_background.Text, Brushes.Transparent), Child = new TextBlock { Text = _text.Text, FontFamily = new FontFamily(string.IsNullOrWhiteSpace(_font.Text) ? "Segoe UI" : _font.Text), FontSize = _fontSize.Value * 360 / 1080, Foreground = BrushOf(_foreground.Text, Brushes.White), TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
+        return new Border { CornerRadius = new CornerRadius(Math.Clamp(_corners.Value, 0, 1) * Math.Min(_item.Width, _item.Height) / 2), Background = BrushOf(_background.Text, Brushes.Transparent), Child = new TextBlock { Text = _text.Text, FontFamily = new FontFamily(string.IsNullOrWhiteSpace(_font.Text) ? "Segoe UI" : _font.Text), FontSize = _fontSize.Value * 360 / 1080, Foreground = BrushOf(_foreground.Text, Brushes.White), TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
     }
     private void RefreshContent()
     {
@@ -196,6 +209,6 @@ internal sealed class GraphicsOverlayEditor : Window
         _target.FontSize = _fontSize.Value; _target.Foreground = string.IsNullOrWhiteSpace(_foreground.Text) ? "White" : _foreground.Text; _target.Background = string.IsNullOrWhiteSpace(_background.Text) ? "Transparent" : _background.Text;
         _target.FillColor1 = string.IsNullOrWhiteSpace(_fill1.Text) ? "White" : _fill1.Text; _target.FillColor2 = string.IsNullOrWhiteSpace(_fill2.Text) ? "Black" : _fill2.Text;
         _target.UseSecondFillColor = _useSecondFill.IsChecked == true; _target.GradientKind = _gradientKind.SelectedItem is GraphicGradientKind kind ? kind : GraphicGradientKind.Linear; _target.GradientAngle = _gradientAngle.Value;
-        _target.Opacity = _opacity.Value; _target.PreserveAspectRatio = _aspect.IsChecked == true; _target.X = Math.Clamp(Canvas.GetLeft(_item) / _stage.Width, 0, 1); _target.Y = Math.Clamp(Canvas.GetTop(_item) / _stage.Height, 0, 1); _target.Width = Math.Clamp(_item.Width / _stage.Width, .01, 1); _target.Height = Math.Clamp(_item.Height / _stage.Height, .01, 1); DialogResult = true;
+        _target.Opacity = _opacity.Value; _target.CornerRadius = _corners.Value; _target.PreserveAspectRatio = _aspect.IsChecked == true; _target.X = Math.Clamp(Canvas.GetLeft(_item) / _stage.Width, 0, 1); _target.Y = Math.Clamp(Canvas.GetTop(_item) / _stage.Height, 0, 1); _target.Width = Math.Clamp(_item.Width / _stage.Width, .01, 1); _target.Height = Math.Clamp(_item.Height / _stage.Height, .01, 1); DialogResult = true;
     }
 }

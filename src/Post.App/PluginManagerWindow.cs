@@ -64,18 +64,6 @@ internal sealed class PluginManagerWindow : Window
         source.Inlines.Add(new Run(". Anyone may propose one, and nothing appears there until it has been reviewed and merged."));
         heading.Children.Add(source);
 
-        heading.Children.Add(new Border
-        {
-            Background = new SolidColorBrush(Color.FromRgb(38, 27, 12)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(120, 88, 32)),
-            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(10), Margin = new Thickness(0, 12, 0, 12),
-            Child = new TextBlock
-            {
-                Text = "A plugin runs inside Post and can reach whatever Post can: your projects, your files, the network. Post checks that a download matches the checksum its author published, which proves it arrived unaltered — not that it is safe to run. Install ones you are willing to trust.",
-                Foreground = new SolidColorBrush(Color.FromRgb(240, 205, 140)), FontSize = 12, TextWrapping = TextWrapping.Wrap,
-            },
-        });
         DockPanel.SetDock(heading, Dock.Top);
         root.Children.Add(heading);
 
@@ -183,12 +171,23 @@ internal sealed class PluginManagerWindow : Window
         }
         else
         {
-            var same = installed.Version.Equals(plugin.Version, StringComparison.OrdinalIgnoreCase);
-            action.Content = same ? "Installed" : $"Update to {plugin.Version}";
-            action.IsEnabled = !same && offered;
+            // A version string is what an author remembers to change. The checksum is what
+            // actually differs, so a rebuilt plugin published under the same version is
+            // still offered — and reinstalling an identical one stays possible, because a
+            // half-installed plugin looks identical to a working one.
+            var sameVersion = installed.Version.Equals(plugin.Version, StringComparison.OrdinalIgnoreCase);
+            var sameFiles = sameVersion
+                && installed.Sha256.Trim().Equals(plugin.Sha256.Trim(), StringComparison.OrdinalIgnoreCase);
+
+            action.Content = sameFiles ? "Reinstall" : sameVersion ? "Update" : $"Update to {plugin.Version}";
+            action.IsEnabled = offered;
             details.Children.Add(new TextBlock
             {
-                Text = same ? $"Installed, version {installed.Version}." : $"Version {installed.Version} is installed.",
+                Text = sameFiles
+                    ? $"Installed, version {installed.Version}."
+                    : sameVersion
+                        ? $"Version {installed.Version} is installed, and this is a newer build of it."
+                        : $"Version {installed.Version} is installed.",
                 Foreground = new SolidColorBrush(Color.FromRgb(126, 214, 160)), FontSize = 11, Margin = new Thickness(0, 5, 0, 0),
             });
             buttons.Children.Add(remove);
@@ -227,6 +226,8 @@ internal sealed class PluginManagerWindow : Window
             "Install plugin", MessageBoxButton.OKCancel, MessageBoxImage.Question);
         if (answer != MessageBoxResult.OK) return;
 
+        var updating = PluginStore.InstalledVersionOf(plugin.Id) is not null;
+
         _refresh.IsEnabled = false;
         _progress.Value = 0;
         _progress.Visibility = Visibility.Visible;
@@ -236,12 +237,19 @@ internal sealed class PluginManagerWindow : Window
             // so, and fetching it happens here rather than surprising someone the first
             // time they use it. The files are the small half, so they take the small share
             // of the bar when there is anything after them.
-            var extra = await Task.Run(() => PluginSetup.DescriptionFor(plugin));
-            var filesShare = extra is null ? 1 : .25;
+            // What it fetches for itself comes from the manifest, because the plugin cannot
+            // be asked yet: its .dll is the thing being downloaded. Asking first was the
+            // bug that stopped a model ever being fetched on a first install — the file was
+            // not there, the answer was always no, and the step was silently skipped.
+            var filesShare = plugin.Setup is null ? 1 : .25;
 
             Report(0, $"Fetching {plugin.Name}");
             await PluginStore.InstallAsync(plugin, _client,
                 new Progress<double>(value => Report(value * filesShare, $"Fetching {plugin.Name}")));
+
+            // Now it is on disk it can speak for itself, which covers a plugin whose
+            // manifest never mentioned its setup.
+            var extra = plugin.Setup ?? await Task.Run(() => PluginSetup.DescriptionFor(plugin));
 
             if (extra is not null)
             {
@@ -254,12 +262,17 @@ internal sealed class PluginManagerWindow : Window
 
             // Started here rather than at the next launch. Nobody installs a thing in order
             // to close the application.
+            //
+            // An update is the exception: the copy already running cannot be unloaded, and
+            // starting the new one beside it would put every menu entry on twice.
             Report(1, "Starting it");
-            var started = Owner is MainWindow main && main.StartPluginNow(plugin);
+            var started = !updating && Owner is MainWindow main && main.StartPluginNow(plugin);
 
             _status.Text = started
                 ? $"{plugin.Name} {plugin.Version} installed, and ready to use."
-                : $"{plugin.Name} {plugin.Version} installed. It is loaded when Post restarts.";
+                : updating
+                    ? $"{plugin.Name} updated to {plugin.Version}. The copy already running stays until Post restarts."
+                    : $"{plugin.Name} {plugin.Version} installed. It is loaded when Post restarts.";
             await LoadAsync(refresh: false);
         }
         catch (Exception exception)

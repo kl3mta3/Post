@@ -12,8 +12,14 @@ internal sealed record ClipCommand(string Header, Func<ClipContext, bool> Applie
 /// <summary>What a plugin asked to appear on an overlay's right-click menu.</summary>
 internal sealed record TextCommand(string Header, Func<TextContext, bool> AppliesTo, Func<TextContext, Task> Invoke);
 
+/// <summary>What a plugin asked to appear when several things are selected.</summary>
+internal sealed record SelectionCommand(string Header, Func<SelectionContext, bool> AppliesTo, Func<SelectionContext, Task> Invoke);
+
 /// <summary>What a plugin asked to appear under Tools.</summary>
 internal sealed record ToolsCommand(string Header, Func<Task> Invoke);
+
+/// <summary>What a plugin asked to appear under Tools ▸ Windows: something that opens.</summary>
+internal sealed record WindowCommand(string Header, Func<Task> Invoke);
 
 /// <summary>
 /// The host handed to each plugin. It is the only way in: a plugin never touches Post's
@@ -23,11 +29,15 @@ internal sealed class PluginHost(MainWindow window, string pluginId) : IPostHost
 {
     private readonly List<ClipCommand> _clipCommands = [];
     private readonly List<TextCommand> _textCommands = [];
+    private readonly List<SelectionCommand> _selectionCommands = [];
     private readonly List<ToolsCommand> _toolsCommands = [];
+    private readonly List<WindowCommand> _windowCommands = [];
 
     public IReadOnlyList<ClipCommand> ClipCommands => _clipCommands;
     public IReadOnlyList<TextCommand> TextCommands => _textCommands;
+    public IReadOnlyList<SelectionCommand> SelectionCommands => _selectionCommands;
     public IReadOnlyList<ToolsCommand> ToolsCommands => _toolsCommands;
+    public IReadOnlyList<WindowCommand> WindowCommands => _windowCommands;
 
     public IPostMenus Menus => this;
     public IPostStorage Storage => this;
@@ -67,8 +77,14 @@ internal sealed class PluginHost(MainWindow window, string pluginId) : IPostHost
     public void AddTextCommand(string header, Func<TextContext, bool> appliesTo, Func<TextContext, Task> invoke)
         => _textCommands.Add(new TextCommand(header, appliesTo, invoke));
 
+    public void AddSelectionCommand(string header, Func<SelectionContext, bool> appliesTo, Func<SelectionContext, Task> invoke)
+        => _selectionCommands.Add(new SelectionCommand(header, appliesTo, invoke));
+
     public void AddToolsCommand(string header, Func<Task> invoke)
         => _toolsCommands.Add(new ToolsCommand(header, invoke));
+
+    public void AddWindowCommand(string header, Func<Task> invoke)
+        => _windowCommands.Add(new WindowCommand(header, invoke));
 
     // ---- storage ------------------------------------------------------------
 

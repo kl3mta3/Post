@@ -46,7 +46,7 @@ internal sealed class PreviewShaderEffect : ShaderEffect
     /// Folds an effect stack into a shader, or returns null when nothing in it can be
     /// shown live (sharpen only appears in the render).
     /// </summary>
-    public static PreviewShaderEffect? For(IReadOnlyList<VideoEffect> effects)
+    public static PreviewShaderEffect? For(IReadOnlyList<VideoEffect> effects, ColorGrade? working = null)
     {
         double vignette = 0, blur = 0;
         var used = false;
@@ -68,7 +68,7 @@ internal sealed class PreviewShaderEffect : ShaderEffect
             }
         }
 
-        var strip = PreviewLut.BuildStrip(effects);
+        var strip = PreviewLut.BuildStrip(effects, working);
         if (strip is null && !used) return null;
 
         return new PreviewShaderEffect(blur > 0)

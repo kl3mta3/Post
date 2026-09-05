@@ -22,11 +22,11 @@ public static class LookStyles
             new ColorGrade { Lift = .08, Contrast = .92, Saturation = .85, HighlightTone = .3, Temperature = .15 }),
         new("Black & White", "Neutral monochrome with a slight contrast lift.",
             new ColorGrade { Saturation = 0, Contrast = 1.12 }),
-        new("High Contrast Punch", "Crisper blacks and stronger colour for social clips.",
+        new("High Contrast Punch", "Crisper blacks and stronger color for social clips.",
             new ColorGrade { Contrast = 1.35, Saturation = 1.18 }),
         new("Bleach Bypass", "Desaturated and harsh, the silver-retention look.",
             new ColorGrade { Saturation = .35, Contrast = 1.3, Gamma = 1.08 }),
-        new("Faded Matte", "Lifted blacks and muted colour for a soft, matte finish.",
+        new("Faded Matte", "Lifted blacks and muted color for a soft, matte finish.",
             new ColorGrade { Lift = .12, Saturation = .8, Contrast = .95 }),
     ];
 
